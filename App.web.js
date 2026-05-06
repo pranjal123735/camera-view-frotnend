@@ -1134,7 +1134,7 @@ function enhanceFrameForDetection(ctx, width, height, diagnostics) {
   const riskTitle = mobilityMode === 'walking' ? 'Walk Risk' : 'Ride Risk';
   const sceneModeTitle =
     fullscreenSceneMode === 'surround360'
-      ? 'SURROUND 360° VISION'
+      ? 'TESLA AUTOPILOT VIEW'
       : fullscreenSceneMode === 'motorcycle360'
       ? 'MOTORCYCLE 360° VISION'
       : fullscreenSceneMode === 'immersive360'
@@ -1650,12 +1650,12 @@ function enhanceFrameForDetection(ctx, width, height, diagnostics) {
                     detectionsCount={detections.length}
                   />
                 ) : fullscreenSceneMode === 'surround360' ? (
-                  <SurroundVisionRenderer
-                    width={layout.w || winW}
-                    height={layout.h || winH}
-                    sceneData={surroundVisionData}
-                    frontVideoElement={videoRef.current}
-                    isRunning={isRunning}
+                  <TeslaAutopilotView
+                    speed={speed || 0}
+                    turnDirection={turnDirection || 'straight'}
+                    roadType={roadType || 'urban'}
+                    detections={detections}
+                    isActive={isRunning}
                   />
                 ) : fullscreenSceneMode === 'motorcycle360' ? (
                   <Motorcycle360Vision
@@ -1758,8 +1758,8 @@ function enhanceFrameForDetection(ctx, width, height, diagnostics) {
                   {`${modeLabel} · `}
                   {fullscreenSceneMode === 'surround360'
                     ? isRunning
-                      ? 'AI-generated 360° scenes · animated roads · inferred objects · seamless stitching'
-                      : 'STBY · surround vision renderer · generates left/right/rear scenes from front camera'
+                      ? 'Tesla Autopilot style · 3D car model · grey object boxes · clean light interface'
+                      : 'STBY · Tesla Autopilot visualization · start detection to see 3D world'
                     : fullscreenSceneMode === 'motorcycle360'
                     ? isRunning
                       ? 'Tesla-style 360° surround vision · 4-camera feeds · distance rings · hazard detection'
@@ -2233,7 +2233,7 @@ function enhanceFrameForDetection(ctx, width, height, diagnostics) {
                   <Text style={styles.buttonText}>
                     Fullscreen Scene:{' '}
                     {fullscreenSceneMode === 'surround360'
-                      ? 'Surround 360°'
+                      ? 'Tesla Autopilot'
                       : fullscreenSceneMode === 'motorcycle360'
                       ? 'Motorcycle 360°'
                       : fullscreenSceneMode === 'autopilot'

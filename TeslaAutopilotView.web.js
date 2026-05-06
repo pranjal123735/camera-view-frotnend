@@ -20,20 +20,21 @@ const TeslaAutopilotView = ({
   const roadOffsetRef = useRef(0);
   const [inferredObjects, setInferredObjects] = useState([]);
 
-  // Tesla-style colors
+  // Tesla-style colors - LIGHT THEME like the image
   const COLORS = {
-    background: '#1a1a1a',        // Dark charcoal like Tesla
-    backgroundLight: '#ffffff',   // Clean white alternative
-    road: '#2a2a2a',             // Dark road
-    laneLines: '#ffffff',        // White lane markings
-    bike: '#4a9eff',             // Tesla blue for bike
-    bikeGlow: '#4a9eff40',       // Blue glow under bike
-    objectNormal: '#888888',     // Grey boxes for objects
+    background: '#f5f5f5',        // Light grey background like Tesla
+    road: '#e8e8e8',             // Light grey road
+    laneLines: '#d0d0d0',        // Subtle grey lane markings
+    laneCenter: '#ffffff',       // White center line
+    car: '#4a90e2',              // Tesla blue for car
+    carShadow: '#00000020',      // Subtle shadow under car
+    objectNormal: '#a8a8a8',     // Light grey boxes for objects
     objectHazard: '#ff8c42',     // Orange for hazard
     objectDanger: '#ff4757',     // Red for danger
-    text: '#ffffff',             // White text
-    textSecondary: '#aaaaaa',    // Grey secondary text
-    laneHighlight: '#4a9eff20',  // Blue tint for current lane
+    text: '#2c2c2c',             // Dark text on light background
+    textSecondary: '#666666',    // Grey secondary text
+    textGreen: '#4CAF50',        // Green for READY status
+    speedLimit: '#ff4444',       // Red circle for speed limit
   };
 
   // Convert camera bbox to 3D world position
@@ -156,135 +157,152 @@ const TeslaAutopilotView = ({
     }
   };
 
-  // Draw motorcycle at center
-  const drawMotorcycle = (ctx, canvasWidth, canvasHeight) => {
+  // Draw Tesla car at center (realistic 3D model like in image)
+  const drawTeslaCar = (ctx, canvasWidth, canvasHeight) => {
     const centerX = canvasWidth / 2;
-    const centerY = canvasHeight / 2 + 50;
+    const centerY = canvasHeight / 2 + 20;
     
-    // Bike lean angle based on turn
-    const leanAngle = turnDirection === 'left' ? -5 : turnDirection === 'right' ? 5 : 0;
+    // Car lean angle based on turn
+    const leanAngle = turnDirection === 'left' ? -3 : turnDirection === 'right' ? 3 : 0;
     
     ctx.save();
     ctx.translate(centerX, centerY);
     ctx.rotate(leanAngle * Math.PI / 180);
     
-    // Blue glow under bike
-    const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, 40);
-    gradient.addColorStop(0, COLORS.bikeGlow);
-    gradient.addColorStop(1, 'transparent');
-    ctx.fillStyle = gradient;
-    ctx.fillRect(-30, -20, 60, 40);
+    // Car shadow
+    ctx.fillStyle = COLORS.carShadow;
+    ctx.fillRect(-25, 15, 50, 8);
     
-    // Bike body (slim rectangle)
-    ctx.fillStyle = COLORS.bike;
-    ctx.fillRect(-4, -25, 8, 50);
+    // Main car body (Tesla blue like in image)
+    const gradient = ctx.createLinearGradient(0, -20, 0, 20);
+    gradient.addColorStop(0, '#5ba3f5');
+    gradient.addColorStop(0.5, COLORS.car);
+    gradient.addColorStop(1, '#3a7bc8');
+    ctx.fillStyle = gradient;
+    
+    // Car body shape (more realistic Tesla-like)
+    ctx.beginPath();
+    ctx.roundRect(-22, -15, 44, 30, 8);
+    ctx.fill();
+    
+    // Car roof (darker)
+    ctx.fillStyle = '#2d5aa0';
+    ctx.beginPath();
+    ctx.roundRect(-18, -12, 36, 15, 6);
+    ctx.fill();
+    
+    // Windshield
+    ctx.fillStyle = '#87ceeb40';
+    ctx.beginPath();
+    ctx.roundRect(-16, -10, 32, 8, 4);
+    ctx.fill();
     
     // Wheels
     ctx.fillStyle = '#333333';
-    ctx.fillRect(-6, -30, 12, 6); // Front wheel
-    ctx.fillRect(-6, 24, 12, 6);  // Rear wheel
-    
-    // Handlebars
-    ctx.fillStyle = COLORS.bike;
-    ctx.fillRect(-15, -28, 30, 3);
+    ctx.beginPath();
+    ctx.roundRect(-20, -18, 8, 4, 2);
+    ctx.roundRect(12, -18, 8, 4, 2);
+    ctx.roundRect(-20, 14, 8, 4, 2);
+    ctx.roundRect(12, 14, 8, 4, 2);
+    ctx.fill();
     
     ctx.restore();
-    
-    // Speed display above bike
-    ctx.fillStyle = COLORS.text;
-    ctx.font = 'bold 36px -apple-system, BlinkMacSystemFont, "SF Pro Display"';
-    ctx.textAlign = 'center';
-    ctx.fillText(Math.round(speed).toString(), centerX, centerY - 80);
-    
-    ctx.font = '14px -apple-system, BlinkMacSystemFont, "SF Pro Display"';
-    ctx.fillStyle = COLORS.textSecondary;
-    ctx.fillText('km/h', centerX, centerY - 55);
   };
 
-  // Draw road with lanes
+  // Draw road with lanes (exactly like Tesla image)
   const drawRoad = (ctx, canvasWidth, canvasHeight) => {
-    const roadWidth = 300;
+    const roadWidth = 200;
     const centerX = canvasWidth / 2;
     
-    // Road curve based on turn direction
-    const curveOffset = turnDirection === 'left' ? -20 : turnDirection === 'right' ? 20 : 0;
-    
-    // Road surface
+    // Road surface (light grey like Tesla)
     ctx.fillStyle = COLORS.road;
-    ctx.fillRect(centerX - roadWidth/2 + curveOffset, 0, roadWidth, canvasHeight);
+    ctx.fillRect(centerX - roadWidth/2, 0, roadWidth, canvasHeight);
     
-    // Current lane highlight
-    ctx.fillStyle = COLORS.laneHighlight;
-    ctx.fillRect(centerX - 50 + curveOffset, 0, 100, canvasHeight);
-    
-    // Lane markings (dashed lines)
+    // Lane markings (subtle dashed lines)
     ctx.strokeStyle = COLORS.laneLines;
-    ctx.lineWidth = 2;
-    ctx.setLineDash([20, 20]);
+    ctx.lineWidth = 1;
+    ctx.setLineDash([15, 15]);
     
     // Animate road scrolling
-    roadOffsetRef.current += speed * 0.1;
-    if (roadOffsetRef.current > 40) roadOffsetRef.current = 0;
+    roadOffsetRef.current += speed * 0.05;
+    if (roadOffsetRef.current > 30) roadOffsetRef.current = 0;
     
-    // Left lane line
-    ctx.beginPath();
-    for (let y = -roadOffsetRef.current; y < canvasHeight + 40; y += 40) {
-      ctx.moveTo(centerX - 75 + curveOffset, y);
-      ctx.lineTo(centerX - 75 + curveOffset, y + 20);
-    }
-    ctx.stroke();
-    
-    // Right lane line
-    ctx.beginPath();
-    for (let y = -roadOffsetRef.current; y < canvasHeight + 40; y += 40) {
-      ctx.moveTo(centerX + 75 + curveOffset, y);
-      ctx.lineTo(centerX + 75 + curveOffset, y + 20);
-    }
-    ctx.stroke();
-    
-    // Road edges (solid lines)
-    ctx.setLineDash([]);
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(centerX - roadWidth/2 + curveOffset, 0);
-    ctx.lineTo(centerX - roadWidth/2 + curveOffset, canvasHeight);
-    ctx.moveTo(centerX + roadWidth/2 + curveOffset, 0);
-    ctx.lineTo(centerX + roadWidth/2 + curveOffset, canvasHeight);
-    ctx.stroke();
-  };
-
-  // Draw Tesla-style top UI bar
-  const drawTopUI = (ctx, canvasWidth) => {
-    // Speed (center)
-    ctx.fillStyle = COLORS.text;
-    ctx.font = 'bold 28px -apple-system, BlinkMacSystemFont, "SF Pro Display"';
-    ctx.textAlign = 'center';
-    ctx.fillText(Math.round(speed).toString(), canvasWidth / 2, 40);
-    
-    ctx.font = '12px -apple-system, BlinkMacSystemFont, "SF Pro Display"';
-    ctx.fillStyle = COLORS.textSecondary;
-    ctx.fillText('km/h', canvasWidth / 2, 55);
-    
-    // Status (left)
-    ctx.textAlign = 'left';
-    ctx.fillStyle = COLORS.text;
-    ctx.font = '14px -apple-system, BlinkMacSystemFont, "SF Pro Display"';
-    ctx.fillText('D', 20, 35);
-    ctx.fillStyle = COLORS.textSecondary;
-    ctx.fillText('READY', 20, 55);
-    
-    // Speed limit (right)
-    ctx.textAlign = 'right';
-    ctx.strokeStyle = COLORS.text;
+    // Center lane line (white)
+    ctx.strokeStyle = COLORS.laneCenter;
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(canvasWidth - 40, 35, 20, 0, Math.PI * 2);
+    for (let y = -roadOffsetRef.current; y < canvasHeight + 30; y += 30) {
+      ctx.moveTo(centerX, y);
+      ctx.lineTo(centerX, y + 15);
+    }
     ctx.stroke();
     
+    // Side lane lines (subtle)
+    ctx.strokeStyle = COLORS.laneLines;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let y = -roadOffsetRef.current; y < canvasHeight + 30; y += 30) {
+      ctx.moveTo(centerX - 60, y);
+      ctx.lineTo(centerX - 60, y + 15);
+      ctx.moveTo(centerX + 60, y);
+      ctx.lineTo(centerX + 60, y + 15);
+    }
+    ctx.stroke();
+    
+    ctx.setLineDash([]);
+  };
+
+  // Draw Tesla-style top UI bar (exactly like image)
+  const drawTopUI = (ctx, canvasWidth) => {
+    // Large speed number (center top)
     ctx.fillStyle = COLORS.text;
-    ctx.font = 'bold 16px -apple-system, BlinkMacSystemFont, "SF Pro Display"';
+    ctx.font = 'bold 72px -apple-system, BlinkMacSystemFont, "SF Pro Display"';
     ctx.textAlign = 'center';
-    ctx.fillText('50', canvasWidth - 40, 40);
+    ctx.fillText(Math.round(speed).toString(), canvasWidth / 2, 80);
+    
+    // Status indicators row (like Tesla image)
+    ctx.font = '12px -apple-system, BlinkMacSystemFont, "SF Pro Display"';
+    ctx.textAlign = 'center';
+    
+    // P R N D status
+    const statusY = 110;
+    ctx.fillStyle = COLORS.textSecondary;
+    ctx.fillText('P', canvasWidth / 2 - 60, statusY);
+    ctx.fillText('R', canvasWidth / 2 - 40, statusY);
+    ctx.fillText('N', canvasWidth / 2 - 20, statusY);
+    
+    // D (Drive) - highlighted in green
+    ctx.fillStyle = COLORS.textGreen;
+    ctx.fillText('D', canvasWidth / 2, statusY);
+    
+    // READY status
+    ctx.fillStyle = COLORS.textGreen;
+    ctx.fillText('READY', canvasWidth / 2 + 30, statusY);
+    
+    // km/h indicator
+    ctx.fillStyle = COLORS.textSecondary;
+    ctx.fillText('km/h', canvasWidth / 2 + 80, statusY);
+    
+    // Battery indicator (like Tesla)
+    ctx.fillStyle = COLORS.textGreen;
+    ctx.fillText('245 km', canvasWidth / 2 + 120, statusY);
+    
+    // Speed limit sign (top right)
+    const speedLimitX = canvasWidth - 60;
+    const speedLimitY = 50;
+    
+    // Red circle
+    ctx.strokeStyle = COLORS.speedLimit;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(speedLimitX, speedLimitY, 25, 0, Math.PI * 2);
+    ctx.stroke();
+    
+    // Speed limit number
+    ctx.fillStyle = COLORS.speedLimit;
+    ctx.font = 'bold 20px -apple-system, BlinkMacSystemFont, "SF Pro Display"';
+    ctx.textAlign = 'center';
+    ctx.fillText('40', speedLimitX, speedLimitY + 7);
   };
 
   // Main render function
@@ -334,8 +352,8 @@ const TeslaAutopilotView = ({
       draw3DBox(ctx, worldX, worldY, obj.size, obj.color, '', obj.distance);
     });
     
-    // Draw motorcycle at center
-    drawMotorcycle(ctx, canvasWidth, canvasHeight);
+    // Draw Tesla car at center
+    drawTeslaCar(ctx, canvasWidth, canvasHeight);
     
     // Draw top UI
     drawTopUI(ctx, canvasWidth);
