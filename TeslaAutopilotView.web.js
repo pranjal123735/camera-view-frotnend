@@ -553,7 +553,14 @@ const TeslaAutopilotView = ({
     inferredObjects.forEach(obj => {
       const worldX = canvasWidth / 2 + obj.x;
       const worldY = canvasHeight / 2 + 50 + obj.y;
-      draw3DBox(ctx, worldX, worldY, obj.size, obj.color, '', obj.distance);
+      
+      // Create mock detection object for inferred objects
+      const mockDetection = {
+        label: 'car',
+        distance_m: obj.distance
+      };
+      
+      draw3DObject(ctx, worldX, worldY, obj.size, obj.color, mockDetection);
     });
     
     // Draw Tesla car at center
