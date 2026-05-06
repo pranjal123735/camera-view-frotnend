@@ -967,8 +967,10 @@ function enhanceFrameForDetection(ctx, width, height, diagnostics) {
       ) {
         const now = Date.now();
         const key = `${topThreat.label}-${topThreat.track_id}-${band}`;
-        const canSpeak =
-          now - lastAlertAtRef.current > ALERT_COOLDOWN_MS && key !== lastAlertKeyRef.current;
+        // Voice alerts disabled - removed per user request
+        // const canSpeak = now - lastAlertAtRef.current > ALERT_COOLDOWN_MS && key !== lastAlertKeyRef.current;
+        // Voice alerts disabled - removed per user request
+        /*
         if (canSpeak) {
           const msg =
             band === 'DANGER'
@@ -982,6 +984,7 @@ function enhanceFrameForDetection(ctx, width, height, diagnostics) {
           lastAlertAtRef.current = now;
           lastAlertKeyRef.current = key;
         }
+        */
       }
     } catch (e) {
       setStatus('Detection paused');
@@ -2172,9 +2175,7 @@ function enhanceFrameForDetection(ctx, width, height, diagnostics) {
                         {isRunning ? 'Stop Detection' : 'Start Detection'}
                       </Text>
                     </Pressable>
-                    <Pressable style={styles.buttonAlt} onPress={() => setVoiceEnabled((v) => !v)}>
-                      <Text style={styles.buttonText}>Voice Alerts: {voiceEnabled ? 'ON' : 'OFF'}</Text>
-                    </Pressable>
+                    {/* Voice Alerts button removed per user request */}
                   </>
                 )}
                 <Pressable
