@@ -2,8 +2,8 @@
  * Web-only Tesla-style bird's-eye scene driven by live detections
  * (bbox + distance_m + track_id). Isolated module — wire from ride fullscreen only.
  */
-import { useEffect, useId, useRef } from 'react';
-import { Platform, StyleSheet, View } from 'react-native';
+import { useEffect, useId, useRef, useState } from 'react';
+import { Platform, StyleSheet, Text, View } from 'react-native';
 import * as THREE from 'three';
 
 function bandColorHex(det) {
@@ -275,8 +275,9 @@ function disposeTrackGroup(scene, group) {
   u.cone?.material?.dispose();
 }
 
-export default function BirdseyeSceneWeb({ width, height, detections, frameSize, isRunning }) {
+export default function BirdseyeSceneWeb({ width, height, detections, frameSize, isRunning, mode = 'riding' }) {
   const mountId = `birdseye-${useId().replace(/:/g, '')}`;
+  const [initError, setInitError] = useState('');
   const detectionsRef = useRef(detections);
   const frameSizeRef = useRef(frameSize);
   const isRunningRef = useRef(isRunning);
@@ -323,7 +324,14 @@ export default function BirdseyeSceneWeb({ width, height, detections, frameSize,
       camera.position.set(0, 34, -28);
       camera.lookAt(0, 0, 30);
 
-      const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+      let renderer;
+      try {
+        renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+        setInitError('');
+      } catch (e) {
+        setInitError(`Birds-Eye renderer unavailable: ${e?.message || 'WebGL disabled'}`);
+        return;
+      }
       renderer.setClearColor(sky, 1);
       renderer.setSize(w, h);
       renderer.setPixelRatio(Math.min(typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1, 2));
@@ -364,16 +372,19 @@ export default function BirdseyeSceneWeb({ width, height, detections, frameSize,
       scene.add(sweep);
       ctx.sweep = sweep;
 
-      const egoGeo = new THREE.BoxGeometry(2.2, 0.9, 4.2);
+      const walkingMode = mode === 'walking';
+      const egoGeo = walkingMode
+        ? new THREE.CapsuleGeometry(0.52, 1.45, 8, 14)
+        : new THREE.BoxGeometry(2.2, 0.9, 4.2);
       const egoMat = new THREE.MeshStandardMaterial({
-        color: 0x22d3ee,
+        color: walkingMode ? 0x86efac : 0x22d3ee,
         metalness: 0.42,
         roughness: 0.38,
-        emissive: 0x0e7490,
+        emissive: walkingMode ? 0x166534 : 0x0e7490,
         emissiveIntensity: 0.62,
       });
       const ego = new THREE.Mesh(egoGeo, egoMat);
-      ego.position.set(0, 0.45, 0);
+      ego.position.set(0, walkingMode ? 1.0 : 0.45, 0);
       const egoEdges = new THREE.LineSegments(
         new THREE.EdgesGeometry(egoGeo, 22),
         new THREE.LineBasicMaterial({
@@ -450,8 +461,8 @@ export default function BirdseyeSceneWeb({ width, height, detections, frameSize,
         const t = Date.now() * 0.001;
         syncTargetsFromDetections();
 
-        const alpha = isRunningRef.current ? 0.2 : 0.07;
-        const egoY = 0.45;
+      const alpha = isRunningRef.current ? 0.2 : 0.07;
+      const egoY = mode === 'walking' ? 1.0 : 0.45;
         const egoZ = 0;
 
         for (const group of ctx.trackGroups.values()) {
@@ -490,7 +501,8 @@ export default function BirdseyeSceneWeb({ width, height, detections, frameSize,
           ctx.egoHalo.scale.setScalar(s);
         }
         if (ctx.ego) {
-          ctx.ego.rotation.y = Math.sin(Date.now() * 0.0007) * 0.02;
+          const sway = mode === 'walking' ? 0.06 : 0.02;
+          ctx.ego.rotation.y = Math.sin(Date.now() * 0.0007) * sway;
         }
         if (ctx.rangeRings) {
           ctx.rangeRings.rotation.y = t * 0.04;
@@ -567,10 +579,25 @@ export default function BirdseyeSceneWeb({ width, height, detections, frameSize,
         });
       }
     };
-  }, [mountId, width, height]);
+  }, [mountId, width, height, mode]);
 
   if (Platform.OS !== 'web') {
     return null;
+  }
+  if (initError) {
+    return (
+      <View
+        testID={mountId}
+        nativeID={mountId}
+        collapsable={false}
+        style={[StyleSheet.absoluteFillObject, styles.errorOverlay]}
+        pointerEvents="none"
+      >
+        <Text style={styles.errorTitle}>Birds-Eye unavailable</Text>
+        <Text style={styles.errorBody}>{initError}</Text>
+        <Text style={styles.errorBody}>Enable browser WebGL / GPU acceleration to use 3D scenes.</Text>
+      </View>
+    );
   }
 
   return (
@@ -583,3 +610,26 @@ export default function BirdseyeSceneWeb({ width, height, detections, frameSize,
     />
   );
 }
+
+const styles = StyleSheet.create({
+  errorOverlay: {
+    zIndex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(2,6,23,0.82)',
+    paddingHorizontal: 22,
+  },
+  errorTitle: {
+    color: '#F0F9FF',
+    fontSize: 18,
+    fontWeight: '800',
+    marginBottom: 8,
+  },
+  errorBody: {
+    color: '#BAE6FD',
+    fontSize: 13,
+    lineHeight: 18,
+    textAlign: 'center',
+    marginBottom: 6,
+  },
+});

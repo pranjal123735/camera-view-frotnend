@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
+  Dimensions,
   Easing,
   Platform,
   Pressable,
@@ -12,13 +13,34 @@ import {
   View,
 } from 'react-native';
 import BirdseyeSceneWeb from './BirdseyeScene.web';
+import Advanced3DSceneWeb from './Advanced3DScene.web';
+import Realistic3DSceneWeb from './Realistic3DScene.web';
+import TeslaStyleView from './TeslaStyleView.web';
+import TeslaAutopilotView from './TeslaAutopilotView.web';
+import Immersive360ViewWeb from './Immersive360View.web';
+import Immersive360FallbackWeb from './Immersive360Fallback.web';
+
+// Import new components
+import EnhancedDashboard from './components/EnhancedDashboard';
+import AdvancedSettings, { THEMES } from './components/AdvancedSettings';
+import AnalyticsVisualization from './components/AnalyticsVisualization';
+
+// Import PWA functionality
+import { initializePWA, scheduleBackgroundSync, cacheManager } from './pwa-config';
 
 const CAPTURE_INTERVAL_MS = 450;
 const ALERT_COOLDOWN_MS = 5000;
 const RADAR_GHOST_MS = 480;
-const DEFAULT_BACKEND_URL =
-  process.env.EXPO_PUBLIC_BACKEND_URL ||
-  (typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:8001');
+const DEFAULT_BACKEND_URL = (() => {
+  if (process.env.EXPO_PUBLIC_BACKEND_URL) return process.env.EXPO_PUBLIC_BACKEND_URL;
+  if (typeof window !== 'undefined') {
+    const { hostname, protocol } = window.location;
+    // 0.0.0.0 is a server bind address — browsers can't connect to it; use localhost instead.
+    const host = hostname === '0.0.0.0' ? 'localhost' : hostname;
+    return `${protocol}//${host}:8001`;
+  }
+  return 'http://127.0.0.1:8001';
+})();
 
 /** Web-only glass panel (react-native-web). */
 const HUD_SHEET_GLASS =
@@ -103,6 +125,30 @@ function mapBoxToOverlay(bbox, frameW, frameH, viewW, viewH) {
     width: ((x2 - x1) / frameW) * viewW,
     height: ((y2 - y1) / frameH) * viewH,
   };
+}
+
+class SceneErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error) {
+    if (this.props.onError) {
+      this.props.onError(error);
+    }
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return this.props.fallback || null;
+    }
+    return this.props.children;
+  }
 }
 
 /** COCO classes often confused with analog/digital speedometers when the lens sees the cluster. */
@@ -269,6 +315,42 @@ export default function App() {
   const [frameSize, setFrameSize] = useState({ w: 1280, h: 720 });
   const [globalBand, setGlobalBand] = useState('SAFE');
   const [voiceEnabled, setVoiceEnabled] = useState(true);
+  const [mobilityMode, setMobilityMode] = useState('riding');
+  const [fullscreenSceneMode, setFullscreenSceneMode] = useState('autopilot');
+  const [loopFeedUrls, setLoopFeedUrls] = useState({
+    left: '',
+    right: '',
+    rear: '',
+  });
+
+  // Enhanced state for new features
+  const [settings, setSettings] = useState({
+    theme: 'dark',
+    sensitivity_person: 0.8,
+    sensitivity_vehicle: 0.85,
+    alert_distance: 15,
+    voice_alerts: true,
+    haptic_feedback: true,
+    hud_opacity: 0.9,
+    font_size: 'medium',
+    fps_limit: '30',
+    processing_quality: 'medium',
+    battery_optimization: true
+  });
+  const [analytics, setAnalytics] = useState({
+    performance: {},
+    safety: {},
+    ai: {},
+    trends: {}
+  });
+  const [userProfile, setUserProfile] = useState(null);
+  const [pwaFeatures, setPwaFeatures] = useState({
+    installPrompt: null,
+    pushEnabled: false,
+    offline: false
+  });
+
+  // Existing state variables...
   /** Prefer infinity / far focus so the road stays sharp instead of the speedometer (browser-dependent). */
   const [roadFocusFarEnabled, setRoadFocusFarEnabled] = useState(true);
   /** Push exposure compensation up when the scene is dark (device-dependent). */
@@ -315,7 +397,23 @@ export default function App() {
   /** Previous `/analyze-image` diagnostics — used to pick JPEG quality before the next capture. */
   const lastFrameDiagnosticsRef = useRef(null);
 
+  // Computed values
   const normalizedUrl = useMemo(() => backendUrl.replace(/\/+$/, ''), [backendUrl]);
+  const immersive360Available = useMemo(() => {
+    if (Platform.OS !== 'web' || typeof document === 'undefined') {
+      return false;
+    }
+    try {
+      const canvas = document.createElement('canvas');
+      const gl =
+        canvas.getContext('webgl') ||
+        canvas.getContext('experimental-webgl') ||
+        canvas.getContext('webgl2');
+      return !!gl;
+    } catch {
+      return false;
+    }
+  }, []);
   const ngrokHeaders = useMemo(
     () =>
       normalizedUrl.includes('ngrok-free.dev') ? { 'ngrok-skip-browser-warning': 'true' } : null,
@@ -325,6 +423,107 @@ export default function App() {
     if (!ngrokHeaders) return init;
     return { ...init, headers: { ...(init.headers || {}), ...ngrokHeaders } };
   };
+
+  // Helper functions for new features
+  const handleSettingsChange = async (newSettings) => {
+    setSettings(newSettings);
+    
+    // Apply theme change immediately
+    if (newSettings.theme !== settings.theme) {
+      document.body.className = `theme-${newSettings.theme}`;
+    }
+    
+    // Save settings to backend
+    try {
+      await fetch(`${normalizedUrl}/learning/personalized-settings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: 'default',
+          context: { settings: newSettings }
+        }),
+        ...withTunnelHeaders()
+      });
+    } catch (error) {
+      console.error('Failed to save settings:', error);
+    }
+  };
+
+  // Initialize PWA features
+  useEffect(() => {
+    const initPWA = async () => {
+      try {
+        const pwaResult = await initializePWA();
+        setPwaFeatures(pwaResult);
+        
+        // Cache detection models
+        await cacheManager.cacheModels();
+        
+        // Setup connection monitoring
+        window.addEventListener('connectionchange', (event) => {
+          setPwaFeatures(prev => ({ ...prev, offline: !event.detail.online }));
+        });
+        
+      } catch (error) {
+        console.error('PWA initialization failed:', error);
+      }
+    };
+    
+    initPWA();
+  }, []);
+
+  // Load user profile and analytics
+  useEffect(() => {
+    const loadUserData = async () => {
+      try {
+        // Load user profile
+        const profileResponse = await fetch(`${normalizedUrl}/learning/user-profile`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: 'default', mobility_mode: mobilityMode })
+        });
+        
+        if (profileResponse.ok) {
+          const profileData = await profileResponse.json();
+          setUserProfile(profileData.profile);
+        }
+        
+        // Load analytics data
+        const [performanceRes, safetyRes, aiRes, trendsRes] = await Promise.all([
+          fetch(`${normalizedUrl}/analytics/performance`),
+          fetch(`${normalizedUrl}/analytics/safety`),
+          fetch(`${normalizedUrl}/analytics/ai-enhancements`),
+          fetch(`${normalizedUrl}/analytics/trends`)
+        ]);
+        
+        const analyticsData = {
+          performance: performanceRes.ok ? await performanceRes.json() : {},
+          safety: safetyRes.ok ? await safetyRes.json() : {},
+          ai: aiRes.ok ? await aiRes.json() : {},
+          trends: trendsRes.ok ? await trendsRes.json() : {}
+        };
+        
+        setAnalytics(analyticsData);
+        
+      } catch (error) {
+        console.error('Failed to load user data:', error);
+      }
+    };
+    
+    loadUserData();
+  }, [normalizedUrl, mobilityMode]);
+
+  useEffect(() => {
+    if (
+      Platform.OS === 'web' &&
+      fullscreenSceneMode === 'immersive360' &&
+      !immersive360Available
+    ) {
+      setFullscreenSceneMode('birdseye');
+      setStatus('Immersive 360 unavailable on this browser/device. Switched to Birds-Eye.');
+      setError('WebGL is disabled, so 360 immersive mode cannot run here.');
+    }
+  }, [fullscreenSceneMode, immersive360Available]);
 
   useEffect(() => {
     if (typeof document === 'undefined') {
@@ -381,7 +580,7 @@ export default function App() {
       try {
         stream = await navigator.mediaDevices.getUserMedia({
           video: {
-            facingMode: 'environment',
+            facingMode: { ideal: 'environment' },
             width: { ideal: 1280 },
             height: { ideal: 720 },
           },
@@ -454,6 +653,116 @@ export default function App() {
     frameDiagnostics?.glare_risk,
   ]);
 
+/**
+ * Client-side frame enhancement for better YOLO detection accuracy.
+ * Applies real-time preprocessing to improve object visibility without latency.
+ */
+function enhanceFrameForDetection(ctx, width, height, diagnostics) {
+  if (!ctx || !width || !height) return;
+
+  // Skip enhancement for very small frames to avoid overhead
+  if (width * height < 50000) return;
+
+  // Get image data for processing
+  const imageData = ctx.getImageData(0, 0, width, height);
+  const data = imageData.data;
+  
+  // Quick brightness analysis (sample every 4th pixel for speed)
+  let totalBrightness = 0;
+  let darkPixels = 0;
+  let brightPixels = 0;
+  let sampleCount = 0;
+  
+  for (let i = 0; i < data.length; i += 16) { // Sample every 4th pixel
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+    const brightness = (r + g + b) / 3;
+    totalBrightness += brightness;
+    sampleCount++;
+    
+    if (brightness < 60) darkPixels++;
+    if (brightness > 200) brightPixels++;
+  }
+  
+  const avgBrightness = totalBrightness / sampleCount;
+  const darkRatio = darkPixels / sampleCount;
+  const brightRatio = brightPixels / sampleCount;
+  
+  // Determine enhancement strategy
+  const isLowLight = avgBrightness < 80 || darkRatio > 0.4;
+  const hasGlare = brightRatio > 0.05;
+  const needsContrast = diagnostics?.low_contrast || avgBrightness < 100;
+  
+  // Skip enhancement if scene is already good
+  if (!isLowLight && !hasGlare && !needsContrast) return;
+  
+  // Apply enhancements
+  if (isLowLight || needsContrast) {
+    // Brightness and contrast enhancement for dark scenes
+    const brightnessFactor = isLowLight ? 1.25 : 1.1;
+    const contrastFactor = needsContrast ? 1.3 : 1.15;
+    
+    for (let i = 0; i < data.length; i += 4) {
+      // Apply brightness boost
+      data[i] = Math.min(255, data[i] * brightnessFactor);
+      data[i + 1] = Math.min(255, data[i + 1] * brightnessFactor);
+      data[i + 2] = Math.min(255, data[i + 2] * brightnessFactor);
+      
+      // Apply contrast enhancement
+      data[i] = Math.min(255, Math.max(0, (data[i] - 128) * contrastFactor + 128));
+      data[i + 1] = Math.min(255, Math.max(0, (data[i + 1] - 128) * contrastFactor + 128));
+      data[i + 2] = Math.min(255, Math.max(0, (data[i + 2] - 128) * contrastFactor + 128));
+    }
+  }
+  
+  if (hasGlare) {
+    // Glare reduction - compress bright regions
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      const brightness = (r + g + b) / 3;
+      
+      if (brightness > 180) {
+        // Compress bright pixels to reduce glare
+        const compressionFactor = 0.75;
+        data[i] = Math.min(255, r * compressionFactor + 50);
+        data[i + 1] = Math.min(255, g * compressionFactor + 50);
+        data[i + 2] = Math.min(255, b * compressionFactor + 50);
+      }
+    }
+  }
+  
+  // Put the enhanced data back
+  ctx.putImageData(imageData, 0, 0);
+  
+  // Light sharpening for better edge detection (only in challenging conditions)
+  if ((isLowLight || needsContrast) && width * height < 500000) { // Only for smaller frames
+    // Simple sharpening using canvas filters (faster than manual processing)
+    const originalData = ctx.getImageData(0, 0, width, height);
+    
+    // Apply slight blur
+    ctx.filter = 'blur(0.5px)';
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = width;
+    tempCanvas.height = height;
+    const tempCtx = tempCanvas.getContext('2d');
+    tempCtx.drawImage(ctx.canvas, 0, 0);
+    
+    // Reset filter and blend for sharpening effect
+    ctx.filter = 'none';
+    ctx.putImageData(originalData, 0, 0);
+    ctx.globalCompositeOperation = 'overlay';
+    ctx.globalAlpha = 0.2;
+    ctx.drawImage(tempCanvas, 0, 0);
+    
+    // Reset composite operation
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1.0;
+  }
+}
+
   useEffect(() => {
     const loadCalibration = async () => {
       try {
@@ -510,6 +819,9 @@ export default function App() {
       canvas.height = fh;
       const ctx = canvas.getContext('2d');
       ctx.drawImage(video, 0, 0, fw, fh);
+
+      // Client-side frame enhancement for better detection accuracy
+      enhanceFrameForDetection(ctx, fw, fh, lastFrameDiagnosticsRef.current);
 
       const jpegQ = lastFrameDiagnosticsRef.current?.low_light ? 0.84 : 0.76;
       const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', jpegQ));
@@ -637,10 +949,36 @@ export default function App() {
       return;
     }
 
+    if (!mobilityMode) {
+      setStatus('Select Riding or Walking first');
+      setError('Choose mode before starting detection');
+      return;
+    }
+
     setStatus('Detection running...');
     setIsRunning(true);
     analyzeFrame();
     timerRef.current = window.setInterval(analyzeFrame, CAPTURE_INTERVAL_MS);
+  };
+
+  const switchMobilityMode = (nextMode) => {
+    if (!nextMode || nextMode === mobilityMode) {
+      return;
+    }
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = 0;
+    }
+    setIsRunning(false);
+    setRideScreenOpen(false);
+    setExpandedPanel('main');
+    setMobilityMode(nextMode);
+    setDetections([]);
+    prevDetectionsRef.current = [];
+    setRadarGhosts([]);
+    setGlobalBand('SAFE');
+    setStatus(`Mode changed: ${nextMode === 'walking' ? 'Walking' : 'Riding'}. Press Start.`);
+    setError(null);
   };
 
   const resetTripStats = async () => {
@@ -694,6 +1032,23 @@ export default function App() {
     }
     return [...detections].sort((a, b) => threatScore(b) - threatScore(a))[0];
   }, [detections]);
+  const modeLabel = mobilityMode === 'walking' ? 'WALK' : 'RIDE';
+  const controlsTitle = mobilityMode === 'walking' ? 'Walk controls' : 'Ride controls';
+  const riskTitle = mobilityMode === 'walking' ? 'Walk Risk' : 'Ride Risk';
+  const sceneModeTitle =
+    fullscreenSceneMode === 'immersive360'
+      ? immersive360Available
+        ? 'IMMERSIVE 360'
+        : 'IMMERSIVE 360 (FALLBACK)'
+      : fullscreenSceneMode === 'autopilot'
+      ? 'TESLA AUTOPILOT'
+      : fullscreenSceneMode === 'tesla'
+      ? 'TESLA STYLE'
+      : fullscreenSceneMode === 'realistic3d'
+      ? 'REALISTIC 3D'
+      : fullscreenSceneMode === 'advanced3d'
+      ? 'ADVANCED 3D'
+      : 'BIRDS-EYE';
   const radarSheetH = Math.min(compact ? 140 : 160, Math.max(96, winH * 0.22));
   const BOTTOM_HUD_HEIGHT = 118;
   const FAB_COLUMN_W = 78;
@@ -834,6 +1189,253 @@ export default function App() {
     };
   }, [rideScreenOpen]);
 
+  // Apply theme to document body
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      document.body.className = `theme-${settings.theme}`;
+    }
+  }, [settings.theme]);
+
+  // Navigation handler for view switching
+  const handleViewChange = (newView) => {
+    setExpandedSections(prev => ({
+      ...prev,
+      [newView]: !prev[newView]
+    }));
+  };
+
+  // PWA Install Button
+  const PWAInstallButton = () => {
+    if (!pwaFeatures.installPrompt) return null;
+    
+    return (
+      <Pressable
+        style={styles.pwaInstallButton}
+        onPress={() => pwaFeatures.installPrompt.showInstallPrompt()}
+      >
+        <Text style={styles.pwaInstallText}>📱 Install App</Text>
+      </Pressable>
+    );
+  };
+
+  // Offline Indicator
+  const OfflineIndicator = () => {
+    if (!pwaFeatures.offline) return null;
+    
+    return (
+      <View style={styles.offlineIndicator}>
+        <Text style={styles.offlineText}>📡 Offline Mode</Text>
+      </View>
+    );
+  };
+
+  // Floating Control System
+  const [navBarVisible, setNavBarVisible] = useState(false);
+  const [controlPanelOpen, setControlPanelOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const navBarAnim = useRef(new Animated.Value(0)).current;
+  const controlPanelAnim = useRef(new Animated.Value(0)).current;
+  const floatingIconAnim = useRef(new Animated.Value(1)).current;
+
+  const toggleNavBar = () => {
+    console.log('toggleNavBar called, navBarVisible:', navBarVisible);
+    setNavBarVisible(!navBarVisible);
+    
+    // If opening nav bar, close control panel
+    if (!navBarVisible && controlPanelOpen) {
+      setControlPanelOpen(false);
+    }
+  };
+
+  const toggleControlPanel = () => {
+    console.log('toggleControlPanel called, controlPanelOpen:', controlPanelOpen);
+    setControlPanelOpen(!controlPanelOpen);
+  };
+
+  // Floating Control System
+  const FloatingControlSystem = () => {
+    console.log('FloatingControlSystem render - rideScreenOpen:', rideScreenOpen, 'navBarVisible:', navBarVisible);
+    if (rideScreenOpen) return null;
+
+    const tabs = [
+      { id: 'camera', label: 'Camera', icon: '📷', isCamera: true },
+      { id: 'dashboard', label: 'Dashboard', icon: '📊' },
+      { id: 'analytics', label: 'Analytics', icon: '📈' },
+      { id: 'settings', label: 'Settings', icon: '⚙️' }
+    ];
+
+    const navBarTranslateY = navBarAnim.interpolate({
+      inputRange: [0, 1],
+      outputRange: [100, 0], // Slide up from bottom
+    });
+
+    console.log('navBarVisible:', navBarVisible, 'navBarAnim current value should animate to:', navBarVisible ? 1 : 0);
+
+    const panelTranslateY = controlPanelAnim.interpolate({
+      inputRange: [0, 1],
+      outputRange: [400, 0], // Slide up from bottom
+    });
+
+    const floatingIconScale = floatingIconAnim.interpolate({
+      inputRange: [0, 1],
+      outputRange: [0.8, 1],
+    });
+
+    return (
+      <>
+        {/* Floating Action Button */}
+        <Animated.View
+          style={[
+            styles.floatingButton,
+            {
+              transform: [{ scale: floatingIconScale }],
+              opacity: navBarVisible ? 0.7 : 1,
+            }
+          ]}
+        >
+          <Pressable
+            style={[
+              styles.floatingButtonInner,
+              navBarVisible && styles.floatingButtonActive
+            ]}
+            onPress={toggleNavBar}
+          >
+            <Text style={styles.floatingButtonIcon}>
+              {navBarVisible ? '✕' : '⚡'}
+            </Text>
+          </Pressable>
+        </Animated.View>
+
+        {/* Bottom Navigation Bar */}
+        {navBarVisible && (
+          <View 
+            style={[
+              styles.bottomNavBar,
+              {
+                // Simple show/hide without complex animation for now
+                opacity: navBarVisible ? 1 : 0,
+              }
+            ]}
+          >
+            {tabs.map(tab => (
+              <Pressable
+                key={tab.id}
+                style={[
+                  styles.bottomNavItem,
+                  (tab.isCamera && !controlPanelOpen) && styles.bottomNavItemActive,
+                  (!tab.isCamera && controlPanelOpen && activeTab === tab.id) && styles.bottomNavItemActive
+                ]}
+                onPress={() => {
+                  if (tab.isCamera) {
+                    if (controlPanelOpen) {
+                      toggleControlPanel();
+                    } else {
+                      // Close nav bar when camera is selected and panel is closed
+                      toggleNavBar();
+                    }
+                  } else {
+                    if (!controlPanelOpen) {
+                      setActiveTab(tab.id);
+                      toggleControlPanel();
+                    } else if (activeTab === tab.id) {
+                      toggleControlPanel();
+                    } else {
+                      setActiveTab(tab.id);
+                    }
+                  }
+                }}
+              >
+                <Text style={[
+                  styles.bottomNavIcon,
+                  ((tab.isCamera && !controlPanelOpen) || (!tab.isCamera && controlPanelOpen && activeTab === tab.id)) && styles.bottomNavIconActive
+                ]}>
+                  {tab.icon}
+                </Text>
+                <Text style={[
+                  styles.bottomNavLabel,
+                  ((tab.isCamera && !controlPanelOpen) || (!tab.isCamera && controlPanelOpen && activeTab === tab.id)) && styles.bottomNavLabelActive
+                ]}>
+                  {tab.label}
+                </Text>
+                {/* Active indicator dot */}
+                {((tab.isCamera && !controlPanelOpen) || (!tab.isCamera && controlPanelOpen && activeTab === tab.id)) && (
+                  <View style={styles.activeIndicator} />
+                )}
+              </Pressable>
+            ))}
+          </View>
+        )}
+
+        {/* Expandable Control Panel */}
+        {controlPanelOpen && (
+          <View 
+            style={[
+              styles.expandablePanel,
+              {
+                opacity: controlPanelOpen ? 1 : 0,
+              }
+            ]}
+          >
+            {/* Panel Header */}
+            <View style={styles.panelHeader}>
+              <View style={styles.panelHandle} />
+              <Text style={styles.panelTitle}>
+                {activeTab === 'dashboard' && '📊 Dashboard'}
+                {activeTab === 'analytics' && '📈 Analytics'}
+                {activeTab === 'settings' && '⚙️ Settings'}
+              </Text>
+              <View style={styles.panelStatus}>
+                <View style={[
+                  styles.statusDot, 
+                  { backgroundColor: isRunning ? '#10B981' : '#6B7280' }
+                ]} />
+                <Text style={styles.statusLabel}>
+                  {isRunning ? 'LIVE' : 'STANDBY'}
+                </Text>
+              </View>
+            </View>
+
+            {/* Panel Content */}
+            <View style={styles.panelContent}>
+              {activeTab === 'dashboard' && (
+                <EnhancedDashboard
+                  detections={detections}
+                  analytics={analytics}
+                  safetyMetrics={analytics.safety}
+                  aiStats={analytics.ai}
+                  isRunning={isRunning}
+                  frameDiagnostics={frameDiagnostics}
+                  compact={true}
+                />
+              )}
+              {activeTab === 'analytics' && (
+                <AnalyticsVisualization
+                  analytics={analytics}
+                  detections={detections}
+                  isRunning={isRunning}
+                  timeRange="24h"
+                  compact={true}
+                />
+              )}
+              {activeTab === 'settings' && (
+                <AdvancedSettings
+                  settings={settings}
+                  onSettingsChange={handleSettingsChange}
+                  userProfile={userProfile}
+                  onClose={() => {
+                    toggleControlPanel();
+                    setTimeout(() => toggleNavBar(), 300);
+                  }}
+                  compact={true}
+                />
+              )}
+            </View>
+          </View>
+        )}
+      </>
+    );
+  };
+
   return (
     <View
       ref={hostRef}
@@ -844,6 +1446,37 @@ export default function App() {
         setLayout({ w: width, h: height });
       }}
     >
+      {!mobilityMode ? (
+        <View style={styles.modePickerOverlay}>
+          <View style={styles.modePickerCard}>
+            <Text style={styles.modePickerTitle}>How are you moving?</Text>
+            <Text style={styles.modePickerSub}>
+              Choose once before detection. This switches center avatar and HUD behavior.
+            </Text>
+            <Pressable
+              style={styles.modePickerButton}
+              onPress={() => {
+                setMobilityMode('riding');
+                setStatus('Mode set: Riding');
+                setError(null);
+              }}
+            >
+              <Text style={styles.modePickerButtonText}>I am Riding</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.modePickerButton, styles.modePickerButtonAlt]}
+              onPress={() => {
+                setMobilityMode('walking');
+                setStatus('Mode set: Walking');
+                setError(null);
+              }}
+            >
+              <Text style={styles.modePickerButtonText}>I am Walking</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
+
       {!expandedPanel && !rideScreenOpen ? (
         <View
           pointerEvents="none"
@@ -857,18 +1490,118 @@ export default function App() {
           <View style={styles.rideFullscreenShell} pointerEvents="none">
             <View pointerEvents="none" style={[styles.rideVisionLayer, styles.rideVisionLayerFullscreen]}>
               {Platform.OS === 'web' ? (
-                <BirdseyeSceneWeb
-                  width={layout.w || winW}
-                  height={layout.h || winH}
-                  detections={detections}
-                  frameSize={frameSize}
-                  isRunning={isRunning}
-                />
+                fullscreenSceneMode === 'immersive360' && immersive360Available ? (
+                  <SceneErrorBoundary
+                    onError={(err) => {
+                      setFullscreenSceneMode('birdseye');
+                      setStatus('Immersive 360 failed on this browser/device. Switched to Birds-Eye.');
+                      setError(`360 disabled: ${err?.message || 'WebGL renderer init failed'}`);
+                    }}
+                    fallback={null}
+                  >
+                    <Immersive360ViewWeb
+                      width={layout.w || winW}
+                      height={layout.h || winH}
+                      mode={mobilityMode || 'riding'}
+                      isRunning={isRunning}
+                      frontVideoEl={videoRef.current}
+                      leftUrl={loopFeedUrls.left}
+                      rightUrl={loopFeedUrls.right}
+                      rearUrl={loopFeedUrls.rear}
+                      fps={fps}
+                      pipelineMs={pipelineMs}
+                      sessionSec={sessionSec}
+                      frameDiagnostics={frameDiagnostics}
+                      detectionsCount={detections.length}
+                      movingCount={movingCount}
+                    />
+                  </SceneErrorBoundary>
+                ) : fullscreenSceneMode === 'immersive360' ? (
+                  <Immersive360FallbackWeb
+                    mode={mobilityMode || 'riding'}
+                    isRunning={isRunning}
+                    frontVideoEl={videoRef.current}
+                    leftUrl={loopFeedUrls.left}
+                    rightUrl={loopFeedUrls.right}
+                    rearUrl={loopFeedUrls.rear}
+                    fps={fps}
+                    pipelineMs={pipelineMs}
+                    sessionSec={sessionSec}
+                    detectionsCount={detections.length}
+                  />
+                ) : fullscreenSceneMode === 'autopilot' ? (
+                  <TeslaAutopilotView
+                    width={layout.w || winW}
+                    height={layout.h || winH}
+                    detections={detections}
+                    frameSize={frameSize}
+                    isRunning={isRunning}
+                    mode="driving"
+                  />
+                ) : fullscreenSceneMode === 'tesla' ? (
+                  <TeslaStyleView
+                    width={layout.w || winW}
+                    height={layout.h || winH}
+                    detections={detections}
+                    frameSize={frameSize}
+                    isRunning={isRunning}
+                    videoElement={videoRef.current}
+                    frameDiagnostics={frameDiagnostics}
+                  />
+                ) : fullscreenSceneMode === 'realistic3d' ? (
+                  <Realistic3DSceneWeb
+                    width={layout.w || winW}
+                    height={layout.h || winH}
+                    detections={detections}
+                    frameSize={frameSize}
+                    isRunning={isRunning}
+                    mode={mobilityMode || 'sitting'}
+                  />
+                ) : fullscreenSceneMode === 'advanced3d' ? (
+                  <Advanced3DSceneWeb
+                    width={layout.w || winW}
+                    height={layout.h || winH}
+                    detections={detections}
+                    frameSize={frameSize}
+                    isRunning={isRunning}
+                    mode={mobilityMode || 'riding'}
+                  />
+                ) : (
+                  <BirdseyeSceneWeb
+                    width={layout.w || winW}
+                    height={layout.h || winH}
+                    detections={detections}
+                    frameSize={frameSize}
+                    isRunning={isRunning}
+                    mode={mobilityMode || 'riding'}
+                  />
+                )
               ) : null}
               <View style={styles.rideTopBadge} pointerEvents="none">
-                <Text style={styles.rideTopBadgeTitle}>BIRDS-EYE · LIVE</Text>
+                <Text style={styles.rideTopBadgeTitle}>{sceneModeTitle} · LIVE</Text>
                 <Text style={styles.rideTopBadgeSub}>
-                  {isRunning
+                  {`${modeLabel} · `}
+                  {fullscreenSceneMode === 'autopilot'
+                    ? isRunning
+                      ? '3D car model · objects move around ego vehicle · Tesla autopilot style'
+                      : 'STBY · Tesla autopilot visualization · 3D car in center · start detection'
+                    : fullscreenSceneMode === 'tesla'
+                    ? isRunning
+                      ? 'Live camera · 3D bounding boxes · Tesla-style overlays · real-time detection'
+                      : 'STBY · Tesla autopilot style · start detection to see live overlays'
+                    : fullscreenSceneMode === 'realistic3d'
+                    ? isRunning
+                      ? 'Room-based 3D · objects from camera · realistic avatar · no defaults'
+                      : 'STBY · realistic 3D scene · builds environment from camera detections'
+                    : fullscreenSceneMode === 'advanced3d'
+                    ? isRunning
+                      ? '360° rotating camera · animated avatar · 3D vehicles · environment rendering'
+                      : 'STBY · 360° view · animated avatar ready · start detection to see 3D world'
+                    : fullscreenSceneMode === 'immersive360' && immersive360Available
+                    ? 'front live + 3 side feeds around center avatar'
+                    : fullscreenSceneMode === 'immersive360'
+                    ? 'CSS fallback mode (no WebGL): front + side/rear feed panes'
+                    : isRunning
                     ? 'Camera hidden · full-screen sim · rings · sweep · tethers'
                     : 'STBY · camera hidden in this view · start tracking for voxels'}
                 </Text>
@@ -889,7 +1622,7 @@ export default function App() {
       {showMainHud ? (
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Open full-screen ride view"
+            accessibilityLabel={`Open full-screen ${modeLabel.toLowerCase()} view`}
           onPress={() => setRideScreenOpen(true)}
           style={({ pressed }) => [
             styles.rideFloatFab,
@@ -1057,7 +1790,7 @@ export default function App() {
                   width: box.width,
                   height: box.height,
                   borderColor: color,
-                  shadowColor: color,
+                  ...createInlineShadowStyle(color),
                 },
               ]}
             >
@@ -1096,7 +1829,7 @@ export default function App() {
           </View>
           <View style={styles.hudDockMetricRow}>
             <Text style={styles.hudDockMetricLeft}>
-              MODE {isRunning ? 'TRACK' : 'STBY'} · SESSION {formatSessionClock(sessionSec)}
+              MODE {modeLabel} · {isRunning ? 'TRACK' : 'STBY'} · SESSION {formatSessionClock(sessionSec)}
             </Text>
             <Text style={styles.hudDockMetricRight}>
               OBJ {detections.length} · MOV {movingCount} · FPS {fps.toFixed(1)}
@@ -1244,7 +1977,7 @@ export default function App() {
                   compact && styles.sectionTitleSmall,
                 ]}
               >
-                {expandedPanel === 'main' && 'Ride controls'}
+                {expandedPanel === 'main' && controlsTitle}
                 {expandedPanel === 'radar' && 'Mini radar'}
                 {expandedPanel === 'cal' && 'Calibration'}
                 {expandedPanel === 'trip' && 'Trip · Phase 4'}
@@ -1299,9 +2032,71 @@ export default function App() {
                     </Pressable>
                   </>
                 )}
+                <Pressable
+                  style={styles.buttonAlt}
+                  onPress={() => {
+                    const modes = ['autopilot', 'tesla', 'realistic3d', 'advanced3d', 'birdseye', 'immersive360'];
+                    const currentIdx = modes.indexOf(fullscreenSceneMode);
+                    const nextIdx = (currentIdx + 1) % modes.length;
+                    const nextMode = modes[nextIdx];
+                    
+                    if (nextMode === 'immersive360' && !immersive360Available) {
+                      setFullscreenSceneMode('autopilot');
+                      setStatus('Immersive 360 unavailable on this browser/device.');
+                      setError('WebGL is disabled, so 360 immersive mode cannot run here.');
+                      return;
+                    }
+                    setFullscreenSceneMode(nextMode);
+                  }}
+                >
+                  <Text style={styles.buttonText}>
+                    Fullscreen Scene:{' '}
+                    {fullscreenSceneMode === 'autopilot'
+                      ? 'Tesla Autopilot'
+                      : fullscreenSceneMode === 'tesla'
+                      ? 'Tesla Style'
+                      : fullscreenSceneMode === 'realistic3d'
+                      ? 'Realistic 3D'
+                      : fullscreenSceneMode === 'advanced3d'
+                      ? 'Advanced 3D'
+                      : fullscreenSceneMode === 'immersive360' && immersive360Available
+                      ? 'Immersive 360'
+                      : 'Birds-Eye'}
+                  </Text>
+                </Pressable>
+                <Text style={[styles.status, compact && styles.statusSmall]}>
+                  Side feed URLs (optional). If blank, placeholder panels are shown.
+                </Text>
+                <TextInput
+                  style={[styles.input, compact && styles.inputCompact]}
+                  value={loopFeedUrls.left}
+                  onChangeText={(v) => setLoopFeedUrls((s) => ({ ...s, left: v }))}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  placeholder="Left video URL (mp4/webm)"
+                  placeholderTextColor="#A5B4FC"
+                />
+                <TextInput
+                  style={[styles.input, compact && styles.inputCompact]}
+                  value={loopFeedUrls.right}
+                  onChangeText={(v) => setLoopFeedUrls((s) => ({ ...s, right: v }))}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  placeholder="Right video URL (mp4/webm)"
+                  placeholderTextColor="#A5B4FC"
+                />
+                <TextInput
+                  style={[styles.input, compact && styles.inputCompact]}
+                  value={loopFeedUrls.rear}
+                  onChangeText={(v) => setLoopFeedUrls((s) => ({ ...s, rear: v }))}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  placeholder="Rear video URL (mp4/webm)"
+                  placeholderTextColor="#A5B4FC"
+                />
                 <View style={[styles.riskBadge, { backgroundColor: riskColor(globalBand) }]}>
                   <Text style={[styles.riskBadgeText, compact && styles.riskBadgeTextSmall]}>
-                    Ride Risk: {globalBand}
+                    {riskTitle}: {globalBand}
                   </Text>
                 </View>
                 <Text style={[styles.status, compact && styles.statusSmall]}>{status}</Text>
@@ -1355,6 +2150,14 @@ export default function App() {
                 </Pressable>
                 <Pressable style={styles.buttonAlt} onPress={() => setTorchEnabled((v) => !v)}>
                   <Text style={styles.buttonText}>Rear light (torch): {torchEnabled ? 'ON' : 'OFF'}</Text>
+                </Pressable>
+                <Pressable
+                  style={styles.buttonAlt}
+                  onPress={() => switchMobilityMode(mobilityMode === 'walking' ? 'riding' : 'walking')}
+                >
+                  <Text style={styles.buttonText}>
+                    Change mode: {mobilityMode === 'walking' ? 'Switch to Riding' : 'Switch to Walking'}
+                  </Text>
                 </Pressable>
                 {cameraTuningNote ? (
                   <Text style={[styles.cameraNote, compact && styles.rideHintSmall]}>{cameraTuningNote}</Text>
@@ -1550,9 +2353,75 @@ export default function App() {
           </View>
         </>
       ) : null}
+
+      {/* PWA Features */}
+      <PWAInstallButton />
+      <OfflineIndicator />
+
+      {/* Floating Control System */}
+      <FloatingControlSystem />
     </View>
   );
 }
+
+const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
+
+// Helper function for platform-specific shadow styles
+const createShadowStyle = (color, opacity, radius, offset = { width: 0, height: 0 }) => {
+  if (Platform.OS === 'web') {
+    return {
+      boxShadow: `${offset.width}px ${offset.height}px ${radius}px rgba(${
+        color === '#22D3EE' ? '34, 211, 238' :
+        color === '#A78BFA' ? '167, 139, 250' :
+        color === '#94A3B8' ? '148, 163, 184' :
+        color === '#2DD4BF' ? '45, 212, 191' :
+        color === '#FB923C' ? '251, 146, 60' :
+        color === '#FACC15' ? '250, 204, 21' :
+        '34, 211, 238'
+      }, ${opacity})`
+    };
+  }
+  return {
+    shadowColor: color,
+    shadowOpacity: opacity,
+    shadowRadius: radius,
+    shadowOffset: offset,
+  };
+};
+
+// Helper function for inline shadow styles with dynamic colors
+const createInlineShadowStyle = (color, opacity = 0.35, radius = 6, offset = { width: 0, height: 0 }) => {
+  if (Platform.OS === 'web') {
+    // Extract RGB values from hex color
+    const hex = color.replace('#', '');
+    const r = parseInt(hex.substr(0, 2), 16);
+    const g = parseInt(hex.substr(2, 2), 16);
+    const b = parseInt(hex.substr(4, 2), 16);
+    return {
+      boxShadow: `${offset.width}px ${offset.height}px ${radius}px rgba(${r}, ${g}, ${b}, ${opacity})`
+    };
+  }
+  return {
+    shadowColor: color,
+    shadowOpacity: opacity,
+    shadowRadius: radius,
+    shadowOffset: offset,
+  };
+};
+
+// Helper function for platform-specific text shadow styles
+const createTextShadowStyle = (color, offset, radius) => {
+  if (Platform.OS === 'web') {
+    return {
+      textShadow: `${offset.width}px ${offset.height}px ${radius}px ${color}`
+    };
+  }
+  return {
+    textShadowColor: color,
+    textShadowOffset: offset,
+    textShadowRadius: radius,
+  };
+};
 
 const styles = StyleSheet.create({
   container: {
@@ -1633,10 +2502,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(45, 212, 191, 0.35)',
     marginBottom: 14,
-    shadowColor: '#22D3EE',
-    shadowOpacity: 0.2,
-    shadowRadius: 20,
-    shadowOffset: { width: 0, height: 0 },
+    ...createShadowStyle('#22D3EE', 0.2, 20),
   },
   idleCenterBlock: {
     alignItems: 'center',
@@ -1680,10 +2546,7 @@ const styles = StyleSheet.create({
     borderRadius: 2,
     borderColor: '#22D3EE',
     backgroundColor: 'rgba(2, 6, 23, 0.12)',
-    shadowColor: '#22D3EE',
-    shadowOpacity: 0.35,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 0 },
+    ...createShadowStyle('#22D3EE', 0.35, 6),
   },
   detectionLabel: {
     position: 'absolute',
@@ -1763,6 +2626,60 @@ const styles = StyleSheet.create({
     alignSelf: 'stretch',
     textAlign: 'left',
   },
+  modePickerOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 60,
+    backgroundColor: 'rgba(2, 6, 23, 0.92)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 18,
+  },
+  modePickerCard: {
+    width: '100%',
+    maxWidth: 420,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(45, 212, 191, 0.5)',
+    backgroundColor: 'rgba(6, 11, 28, 0.96)',
+    padding: 16,
+  },
+  modePickerTitle: {
+    color: '#F0F9FF',
+    fontSize: 20,
+    fontWeight: '800',
+    marginBottom: 8,
+    letterSpacing: 0.6,
+    fontFamily: Platform.OS === 'web' ? 'Orbitron, sans-serif' : undefined,
+  },
+  modePickerSub: {
+    color: '#A5F3FC',
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: 12,
+    fontFamily: Platform.OS === 'web' ? 'Rajdhani, system-ui, sans-serif' : undefined,
+  },
+  modePickerButton: {
+    minHeight: 44,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(34, 211, 238, 0.25)',
+    borderWidth: 1,
+    borderColor: 'rgba(34, 211, 238, 0.5)',
+    marginBottom: 10,
+  },
+  modePickerButtonAlt: {
+    backgroundColor: 'rgba(56, 189, 248, 0.2)',
+    borderColor: 'rgba(125, 211, 252, 0.5)',
+    marginBottom: 0,
+  },
+  modePickerButtonText: {
+    color: '#F0F9FF',
+    fontSize: 14,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    fontFamily: Platform.OS === 'web' ? 'Rajdhani, system-ui, sans-serif' : undefined,
+  },
   saveCalButton: {
     alignItems: 'center',
     paddingVertical: 12,
@@ -1802,10 +2719,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderWidth: 1,
     borderColor: 'rgba(34, 211, 238, 0.65)',
-    shadowColor: '#22D3EE',
-    shadowOpacity: 0.25,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 0 },
+    ...createShadowStyle('#22D3EE', 0.25, 10),
   },
   buttonAlt: {
     alignItems: 'center',
@@ -2153,10 +3067,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(3, 7, 18, 0.88)',
     borderWidth: 1,
     borderColor: 'rgba(45, 212, 191, 0.55)',
-    shadowColor: '#22D3EE',
-    shadowOpacity: 0.25,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 0 },
+    ...createShadowStyle('#22D3EE', 0.25, 10),
   },
   rideFloatFabPressed: {
     backgroundColor: 'rgba(8, 51, 68, 0.95)',
@@ -2303,10 +3214,7 @@ const styles = StyleSheet.create({
     height: 2,
     backgroundColor: 'rgba(34, 211, 238, 0.85)',
     borderRadius: 1,
-    shadowColor: '#22D3EE',
-    shadowOpacity: 0.9,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 0 },
+    ...createShadowStyle('#22D3EE', 0.9, 6),
   },
   hudDockDot: {
     position: 'absolute',
@@ -2347,10 +3255,7 @@ const styles = StyleSheet.create({
     borderRadius: 2,
     borderWidth: 1,
     borderColor: 'rgba(6, 182, 212, 0.35)',
-    shadowColor: '#22D3EE',
-    shadowOpacity: 0.5,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 0 },
+    ...createShadowStyle('#22D3EE', 0.5, 8),
   },
   panelFab: {
     position: 'absolute',
@@ -2367,51 +3272,34 @@ const styles = StyleSheet.create({
   },
   panelFabMain: {
     borderColor: 'rgba(167, 139, 250, 0.95)',
-    shadowColor: '#A78BFA',
-    shadowOpacity: 0.55,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 0 },
+    ...createShadowStyle('#A78BFA', 0.55, 14),
     backgroundColor: 'rgba(46, 16, 80, 0.75)',
   },
   panelFabRadar: {
     borderColor: 'rgba(34, 211, 238, 0.9)',
-    shadowColor: '#22D3EE',
-    shadowOpacity: 0.5,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 0 },
+    ...createShadowStyle('#22D3EE', 0.5, 14),
     backgroundColor: 'rgba(8, 47, 73, 0.85)',
   },
   panelFabCal: {
     borderColor: 'rgba(148, 163, 184, 0.85)',
-    shadowColor: '#94A3B8',
-    shadowOpacity: 0.35,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 0 },
+    ...createShadowStyle('#94A3B8', 0.35, 10),
     backgroundColor: 'rgba(15, 23, 42, 0.9)',
   },
   panelFabTrip: {
     borderColor: 'rgba(45, 212, 191, 0.9)',
-    shadowColor: '#2DD4BF',
-    shadowOpacity: 0.45,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 0 },
+    ...createShadowStyle('#2DD4BF', 0.45, 12),
     backgroundColor: 'rgba(6, 78, 59, 0.75)',
   },
   panelFabThreat: {
     borderColor: 'rgba(251, 146, 60, 0.95)',
-    shadowColor: '#FB923C',
-    shadowOpacity: 0.5,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 0 },
+    ...createShadowStyle('#FB923C', 0.5, 14),
     backgroundColor: 'rgba(67, 20, 7, 0.8)',
   },
   panelFabGlyph: {
     color: '#F8FAFC',
     fontSize: 21,
     fontWeight: '800',
-    textShadowColor: 'rgba(0, 0, 0, 0.75)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 3,
+    ...createTextShadowStyle('rgba(0, 0, 0, 0.75)', { width: 0, height: 1 }, 3),
     fontFamily: Platform.OS === 'web' ? 'Orbitron, sans-serif' : undefined,
   },
   panelFabBadge: {
@@ -2444,10 +3332,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FACC15',
     borderWidth: 1,
     borderColor: '#FDE047',
-    shadowColor: '#FACC15',
-    shadowOpacity: 0.9,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 0 },
+    ...createShadowStyle('#FACC15', 0.9, 6),
   },
   panelFabBackdrop: {
     ...StyleSheet.absoluteFillObject,
@@ -2666,4 +3551,334 @@ const styles = StyleSheet.create({
     fontFamily: Platform.OS === 'web' ? 'Rajdhani, system-ui, sans-serif' : undefined,
     fontWeight: '600',
   },
+
+  // Floating Control System Styles
+  floatingButton: {
+    position: 'absolute',
+    bottom: 30,
+    right: 20,
+    width: 60,
+    height: 60,
+    zIndex: 200,
+  },
+  floatingButtonInner: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: 'rgba(15, 23, 42, 0.95)',
+    borderWidth: 2,
+    borderColor: 'rgba(45, 212, 191, 0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    ...(Platform.OS === 'web' ? {
+      boxShadow: '0 4px 12px rgba(34, 211, 238, 0.4)',
+      animation: 'pulse 2s infinite',
+    } : {
+      shadowColor: '#22D3EE',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.4,
+      shadowRadius: 12,
+      elevation: 8,
+    }),
+  },
+  floatingButtonActive: {
+    backgroundColor: 'rgba(34, 211, 238, 0.2)',
+    borderColor: 'rgba(34, 211, 238, 0.8)',
+    shadowOpacity: 0.6,
+    shadowRadius: 16,
+    transform: [{ scale: 1.1 }],
+  },
+  floatingButtonIcon: {
+    fontSize: 28,
+    color: '#22D3EE',
+    fontWeight: 'bold',
+    ...(Platform.OS === 'web' ? {
+      textShadow: '0 0 8px rgba(34, 211, 238, 0.5)',
+    } : {
+      textShadowColor: 'rgba(34, 211, 238, 0.5)',
+      textShadowOffset: { width: 0, height: 0 },
+      textShadowRadius: 8,
+    }),
+  },
+  bottomNavBar: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 80,
+    backgroundColor: 'rgba(255, 0, 0, 0.8)', // Temporary red background for debugging
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(45, 212, 191, 0.3)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingBottom: Platform.OS === 'web' ? 8 : 20, // Account for safe area
+    zIndex: 100,
+    // Add backdrop blur effect for web
+    ...(Platform.OS === 'web' && {
+      backdropFilter: 'blur(20px)',
+      WebkitBackdropFilter: 'blur(20px)',
+    }),
+  },
+  bottomNavItem: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+    borderRadius: 12,
+    marginHorizontal: 2,
+    position: 'relative',
+    transition: 'all 0.2s ease',
+  },
+  bottomNavItemActive: {
+    backgroundColor: 'rgba(34, 211, 238, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(34, 211, 238, 0.4)',
+    ...(Platform.OS === 'web' ? {
+      boxShadow: '0 2px 4px rgba(34, 211, 238, 0.3)',
+    } : {
+      shadowColor: '#22D3EE',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.3,
+      shadowRadius: 4,
+      elevation: 4,
+    }),
+  },
+  bottomNavIcon: {
+    fontSize: 20,
+    marginBottom: 2,
+    color: '#94A3B8',
+    transition: 'color 0.2s ease',
+  },
+  bottomNavIconActive: {
+    color: '#22D3EE',
+    ...(Platform.OS === 'web' ? {
+      textShadow: '0 0 8px rgba(34, 211, 238, 0.5)',
+    } : {
+      textShadowColor: 'rgba(34, 211, 238, 0.5)',
+      textShadowOffset: { width: 0, height: 0 },
+      textShadowRadius: 8,
+    }),
+  },
+  bottomNavLabel: {
+    fontSize: 10,
+    fontWeight: '500',
+    color: '#64748B',
+    textAlign: 'center',
+    transition: 'color 0.2s ease',
+  },
+  bottomNavLabelActive: {
+    color: '#22D3EE',
+    fontWeight: '600',
+  },
+  activeIndicator: {
+    position: 'absolute',
+    top: 2,
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#22D3EE',
+    ...(Platform.OS === 'web' ? {
+      boxShadow: '0 0 4px rgba(34, 211, 238, 0.8)',
+    } : {
+      shadowColor: '#22D3EE',
+      shadowOffset: { width: 0, height: 0 },
+      shadowOpacity: 0.8,
+      shadowRadius: 4,
+    }),
+  },
+  expandablePanel: {
+    position: 'absolute',
+    bottom: 80, // Above the nav bar
+    left: 0,
+    right: 0,
+    height: screenHeight * 0.6, // 60% of screen height
+    backgroundColor: 'rgba(15, 23, 42, 0.98)',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    borderTopWidth: 1,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderColor: 'rgba(45, 212, 191, 0.4)',
+    zIndex: 90,
+    overflow: 'hidden',
+    ...(Platform.OS === 'web' ? {
+      backdropFilter: 'blur(20px)',
+      WebkitBackdropFilter: 'blur(20px)',
+      boxShadow: '0 -4px 16px rgba(0, 0, 0, 0.3)',
+    } : {
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: -4 },
+      shadowOpacity: 0.3,
+      shadowRadius: 16,
+      elevation: 16,
+    }),
+  },
+  panelHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    backgroundColor: 'rgba(30, 41, 59, 0.8)',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(45, 212, 191, 0.3)',
+    position: 'relative',
+  },
+  panelHandle: {
+    position: 'absolute',
+    top: 8,
+    left: '50%',
+    marginLeft: -20,
+    width: 40,
+    height: 4,
+    backgroundColor: 'rgba(148, 163, 184, 0.5)',
+    borderRadius: 2,
+  },
+  panelTitle: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: 'bold',
+    fontFamily: Platform.OS === 'web' ? 'Orbitron, sans-serif' : undefined,
+    ...createTextShadowStyle('rgba(34, 211, 238, 0.3)', { width: 0, height: 1 }, 2),
+  },
+  panelStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.3)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  statusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginRight: 4,
+    // Add pulsing animation for active status
+    ...(Platform.OS === 'web' && {
+      animation: 'pulse 1.5s infinite',
+    }),
+  },
+  statusLabel: {
+    color: '#94A3B8',
+    fontSize: 10,
+    fontWeight: '600',
+    letterSpacing: 0.5,
+  },
+  panelContent: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.5)',
+    overflow: 'hidden',
+  },
+
+  pwaInstallButton: {
+    position: 'absolute',
+    top: 20,
+    right: 20,
+    backgroundColor: 'rgba(34, 211, 238, 0.9)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    zIndex: 150,
+  },
+  pwaInstallText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+
+  offlineIndicator: {
+    position: 'absolute',
+    top: 20,
+    left: 20,
+    backgroundColor: 'rgba(239, 68, 68, 0.9)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    zIndex: 150,
+  },
+  offlineText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '600',
+  },
 });
+
+// Add CSS animations for web platform
+if (Platform.OS === 'web' && typeof document !== 'undefined') {
+  const style = document.createElement('style');
+  style.textContent = `
+    @keyframes pulse {
+      0% {
+        opacity: 1;
+        transform: scale(1);
+      }
+      50% {
+        opacity: 0.8;
+        transform: scale(1.05);
+      }
+      100% {
+        opacity: 1;
+        transform: scale(1);
+      }
+    }
+    
+    @keyframes slideUp {
+      from {
+        transform: translateY(100%);
+        opacity: 0;
+      }
+      to {
+        transform: translateY(0);
+        opacity: 1;
+      }
+    }
+    
+    @keyframes slideDown {
+      from {
+        transform: translateY(0);
+        opacity: 1;
+      }
+      to {
+        transform: translateY(100%);
+        opacity: 0;
+      }
+    }
+    
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+      }
+      to {
+        opacity: 1;
+      }
+    }
+    
+    @keyframes glow {
+      0% {
+        box-shadow: 0 0 5px rgba(34, 211, 238, 0.3);
+      }
+      50% {
+        box-shadow: 0 0 20px rgba(34, 211, 238, 0.6);
+      }
+      100% {
+        box-shadow: 0 0 5px rgba(34, 211, 238, 0.3);
+      }
+    }
+    
+    @keyframes bounce {
+      0%, 20%, 50%, 80%, 100% {
+        transform: translateY(0);
+      }
+      40% {
+        transform: translateY(-4px);
+      }
+      60% {
+        transform: translateY(-2px);
+      }
+    }
+  `;
+  document.head.appendChild(style);
+}
