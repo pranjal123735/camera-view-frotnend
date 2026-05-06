@@ -19,6 +19,8 @@ import TeslaStyleView from './TeslaStyleView.web';
 import TeslaAutopilotView from './TeslaAutopilotView.web';
 import Immersive360ViewWeb from './Immersive360View.web';
 import Immersive360FallbackWeb from './Immersive360Fallback.web';
+import Motorcycle360Vision from './Motorcycle360Vision.web';
+import SurroundVisionRenderer from './SurroundVisionRenderer.web';
 
 // Import new components
 import EnhancedDashboard from './components/EnhancedDashboard';
@@ -316,7 +318,7 @@ export default function App() {
   const [globalBand, setGlobalBand] = useState('SAFE');
   const [voiceEnabled, setVoiceEnabled] = useState(true);
   const [mobilityMode, setMobilityMode] = useState('riding');
-  const [fullscreenSceneMode, setFullscreenSceneMode] = useState('autopilot');
+  const [fullscreenSceneMode, setFullscreenSceneMode] = useState('surround360');
   const [loopFeedUrls, setLoopFeedUrls] = useState({
     left: '',
     right: '',
@@ -349,6 +351,7 @@ export default function App() {
     pushEnabled: false,
     offline: false
   });
+  const [surroundVisionData, setSurroundVisionData] = useState(null);
 
   // Existing state variables...
   /** Prefer infinity / far focus so the road stays sharp instead of the speedometer (browser-dependent). */
@@ -423,6 +426,61 @@ export default function App() {
     if (!ngrokHeaders) return init;
     return { ...init, headers: { ...(init.headers || {}), ...ngrokHeaders } };
   };
+
+  const generateSurroundVisionData = async () => {
+    if (!isRunning) return;
+
+    try {
+      // Prepare detected objects data
+      const detectedObjectsData = detections.map(d => ({
+        label: d.label,
+        confidence: d.confidence || 0.8,
+        bbox: d.bbox_xyxy || [0, 0, 100, 100],
+        distance_m: Number(d.distance_m) || 10.0,
+        position: d.bbox_xyxy ? 
+          (d.bbox_xyxy[0] < frameSize.w / 3 ? 'left' : 
+           d.bbox_xyxy[0] > frameSize.w * 2/3 ? 'right' : 'center') : 'center',
+        is_moving: d.is_moving || false
+      }));
+
+      // Determine road type based on context (simplified)
+      const roadType = 'urban'; // Could be enhanced with actual detection
+
+      // Determine turn direction (simplified - could use gyroscope data)
+      const turnDirection = 'straight';
+
+      // Mock speed (replace with actual speed sensor data)
+      const speed = 45.0;
+
+      // Call surround vision API
+      const response = await fetch(`${normalizedUrl}/surround-vision/render-mock`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          road_type: roadType,
+          speed: speed,
+          turn_direction: turnDirection,
+          detected_objects: detectedObjectsData
+        }),
+        ...withTunnelHeaders()
+      });
+
+      if (response.ok) {
+        const surroundData = await response.json();
+        setSurroundVisionData(surroundData);
+      }
+    } catch (error) {
+      console.error('Failed to generate surround vision data:', error);
+    }
+  };
+
+  // Generate surround vision data periodically
+  useEffect(() => {
+    if (!isRunning) return;
+
+    const interval = setInterval(generateSurroundVisionData, 500); // Update every 500ms
+    return () => clearInterval(interval);
+  }, [isRunning, detections, frameSize]);
 
   // Helper functions for new features
   const handleSettingsChange = async (newSettings) => {
@@ -1036,7 +1094,11 @@ function enhanceFrameForDetection(ctx, width, height, diagnostics) {
   const controlsTitle = mobilityMode === 'walking' ? 'Walk controls' : 'Ride controls';
   const riskTitle = mobilityMode === 'walking' ? 'Walk Risk' : 'Ride Risk';
   const sceneModeTitle =
-    fullscreenSceneMode === 'immersive360'
+    fullscreenSceneMode === 'surround360'
+      ? 'SURROUND 360° VISION'
+      : fullscreenSceneMode === 'motorcycle360'
+      ? 'MOTORCYCLE 360° VISION'
+      : fullscreenSceneMode === 'immersive360'
       ? immersive360Available
         ? 'IMMERSIVE 360'
         : 'IMMERSIVE 360 (FALLBACK)'
@@ -1239,17 +1301,35 @@ function enhanceFrameForDetection(ctx, width, height, diagnostics) {
 
   const toggleNavBar = () => {
     console.log('toggleNavBar called, navBarVisible:', navBarVisible);
-    setNavBarVisible(!navBarVisible);
+    const newNavBarVisible = !navBarVisible;
+    setNavBarVisible(newNavBarVisible);
+    
+    // Animate the navigation bar
+    Animated.spring(navBarAnim, {
+      toValue: newNavBarVisible ? 1 : 0,
+      useNativeDriver: true,
+      tension: 100,
+      friction: 8,
+    }).start();
     
     // If opening nav bar, close control panel
-    if (!navBarVisible && controlPanelOpen) {
+    if (newNavBarVisible && controlPanelOpen) {
       setControlPanelOpen(false);
     }
   };
 
   const toggleControlPanel = () => {
     console.log('toggleControlPanel called, controlPanelOpen:', controlPanelOpen);
-    setControlPanelOpen(!controlPanelOpen);
+    const newControlPanelOpen = !controlPanelOpen;
+    setControlPanelOpen(newControlPanelOpen);
+    
+    // Animate the control panel
+    Animated.spring(controlPanelAnim, {
+      toValue: newControlPanelOpen ? 1 : 0,
+      useNativeDriver: true,
+      tension: 100,
+      friction: 8,
+    }).start();
   };
 
   // Floating Control System
@@ -1308,11 +1388,11 @@ function enhanceFrameForDetection(ctx, width, height, diagnostics) {
 
         {/* Bottom Navigation Bar */}
         {navBarVisible && (
-          <View 
+          <Animated.View 
             style={[
               styles.bottomNavBar,
               {
-                // Simple show/hide without complex animation for now
+                transform: [{ translateY: navBarTranslateY }],
                 opacity: navBarVisible ? 1 : 0,
               }
             ]}
@@ -1363,15 +1443,16 @@ function enhanceFrameForDetection(ctx, width, height, diagnostics) {
                 )}
               </Pressable>
             ))}
-          </View>
+          </Animated.View>
         )}
 
         {/* Expandable Control Panel */}
         {controlPanelOpen && (
-          <View 
+          <Animated.View 
             style={[
               styles.expandablePanel,
               {
+                transform: [{ translateY: panelTranslateY }],
                 opacity: controlPanelOpen ? 1 : 0,
               }
             ]}
@@ -1430,7 +1511,7 @@ function enhanceFrameForDetection(ctx, width, height, diagnostics) {
                 />
               )}
             </View>
-          </View>
+          </Animated.View>
         )}
       </>
     );
@@ -1529,6 +1610,62 @@ function enhanceFrameForDetection(ctx, width, height, diagnostics) {
                     sessionSec={sessionSec}
                     detectionsCount={detections.length}
                   />
+                ) : fullscreenSceneMode === 'surround360' ? (
+                  <SurroundVisionRenderer
+                    width={layout.w || winW}
+                    height={layout.h || winH}
+                    sceneData={surroundVisionData}
+                    frontVideoElement={videoRef.current}
+                    isRunning={isRunning}
+                  />
+                ) : fullscreenSceneMode === 'motorcycle360' ? (
+                  <Motorcycle360Vision
+                    width={layout.w || winW}
+                    height={layout.h || winH}
+                    visionData={{
+                      timestamp: Date.now(),
+                      speed: 45, // Mock speed - replace with actual
+                      road_type: "urban",
+                      weather: "clear",
+                      bike: {
+                        position: "center",
+                        heading: 0
+                      },
+                      cameras: {
+                        front: {
+                          objects: detections.map(d => ({
+                            label: d.label,
+                            confidence: d.confidence || 0.8,
+                            position_in_frame: "center",
+                            distance: Number(d.distance_m) < 3 ? "near" : Number(d.distance_m) < 10 ? "mid" : "far",
+                            motion: d.is_moving ? "slow" : "static",
+                            bbox: d.bbox_xyxy || [0, 0, 100, 100]
+                          })),
+                          lane_detected: true,
+                          road_surface: "asphalt",
+                          hazard_level: detections.length > 0 ? 1 : 0,
+                          hazard_note: detections.length > 0 ? `${detections.length} objects detected` : "All clear"
+                        },
+                        left: { objects: [], lane_detected: false, road_surface: "asphalt", hazard_level: 0, hazard_note: "All clear" },
+                        right: { objects: [], lane_detected: false, road_surface: "asphalt", hazard_level: 0, hazard_note: "All clear" },
+                        rear: { objects: [], lane_detected: false, road_surface: "asphalt", hazard_level: 0, hazard_note: "All clear" }
+                      },
+                      global_hazard: {
+                        level: detections.length > 2 ? 2 : detections.length > 0 ? 1 : 0,
+                        direction: detections.length > 0 ? "front" : "none",
+                        note: detections.length > 2 ? "Multiple objects detected" : detections.length > 0 ? "Objects ahead" : "All clear",
+                        alert_color: detections.length > 2 ? "yellow" : detections.length > 0 ? "blue" : "green"
+                      }
+                    }}
+                    cameraFeeds={{
+                      front: videoRef.current,
+                      left: null,
+                      right: null,
+                      rear: null
+                    }}
+                    isRunning={isRunning}
+                    fallbackMode={true}
+                  />
                 ) : fullscreenSceneMode === 'autopilot' ? (
                   <TeslaAutopilotView
                     width={layout.w || winW}
@@ -1581,7 +1718,15 @@ function enhanceFrameForDetection(ctx, width, height, diagnostics) {
                 <Text style={styles.rideTopBadgeTitle}>{sceneModeTitle} · LIVE</Text>
                 <Text style={styles.rideTopBadgeSub}>
                   {`${modeLabel} · `}
-                  {fullscreenSceneMode === 'autopilot'
+                  {fullscreenSceneMode === 'surround360'
+                    ? isRunning
+                      ? 'AI-generated 360° scenes · animated roads · inferred objects · seamless stitching'
+                      : 'STBY · surround vision renderer · generates left/right/rear scenes from front camera'
+                    : fullscreenSceneMode === 'motorcycle360'
+                    ? isRunning
+                      ? 'Tesla-style 360° surround vision · 4-camera feeds · distance rings · hazard detection'
+                      : 'STBY · 360° motorcycle vision system · start detection for full surround awareness'
+                    : fullscreenSceneMode === 'autopilot'
                     ? isRunning
                       ? '3D car model · objects move around ego vehicle · Tesla autopilot style'
                       : 'STBY · Tesla autopilot visualization · 3D car in center · start detection'
@@ -2035,7 +2180,7 @@ function enhanceFrameForDetection(ctx, width, height, diagnostics) {
                 <Pressable
                   style={styles.buttonAlt}
                   onPress={() => {
-                    const modes = ['autopilot', 'tesla', 'realistic3d', 'advanced3d', 'birdseye', 'immersive360'];
+                    const modes = ['surround360', 'motorcycle360', 'autopilot', 'tesla', 'realistic3d', 'advanced3d', 'birdseye', 'immersive360'];
                     const currentIdx = modes.indexOf(fullscreenSceneMode);
                     const nextIdx = (currentIdx + 1) % modes.length;
                     const nextMode = modes[nextIdx];
@@ -2051,7 +2196,11 @@ function enhanceFrameForDetection(ctx, width, height, diagnostics) {
                 >
                   <Text style={styles.buttonText}>
                     Fullscreen Scene:{' '}
-                    {fullscreenSceneMode === 'autopilot'
+                    {fullscreenSceneMode === 'surround360'
+                      ? 'Surround 360°'
+                      : fullscreenSceneMode === 'motorcycle360'
+                      ? 'Motorcycle 360°'
+                      : fullscreenSceneMode === 'autopilot'
                       ? 'Tesla Autopilot'
                       : fullscreenSceneMode === 'tesla'
                       ? 'Tesla Style'
