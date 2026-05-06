@@ -125,16 +125,6 @@ const TeslaAutopilotView = ({
     
     return { x: worldX, y: worldY };
   };
-  const bboxToWorldPosition = (bbox, canvasWidth, canvasHeight) => {
-    const centerX = bbox.bbox_center_x || (bbox.bbox_xyxy[0] + bbox.bbox_xyxy[2]) / 2 / canvasWidth;
-    const centerY = bbox.bbox_center_y || (bbox.bbox_xyxy[1] + bbox.bbox_xyxy[3]) / 2 / canvasHeight;
-    
-    // Map camera coordinates to 3D world
-    const worldX = (centerX - 0.5) * 400; // -200 to +200 pixels from center
-    const worldY = (1 - centerY) * 300 + 50; // Distance from bike (50-350 pixels)
-    
-    return { x: worldX, y: worldY };
-  };
 
   // Get object size and shape based on actual detected type
   const getObjectSize = (label) => {
