@@ -398,6 +398,12 @@ export default function App() {
   const [radarGhosts, setRadarGhosts] = useState([]);
   const prevDetectionsRef = useRef([]);
   /** Previous `/analyze-image` diagnostics — used to pick JPEG quality before the next capture. */
+  const [prevDiagnostics, setPrevDiagnostics] = useState(null);
+  
+  // Tesla Autopilot View state variables
+  const [speed, setSpeed] = useState(0);
+  const [turnDirection, setTurnDirection] = useState('straight');
+  const [roadType, setRoadType] = useState('urban');
   const lastFrameDiagnosticsRef = useRef(null);
 
   // Computed values
@@ -443,23 +449,19 @@ export default function App() {
         is_moving: d.is_moving || false
       }));
 
-      // Determine road type based on context (simplified)
-      const roadType = 'urban'; // Could be enhanced with actual detection
-
-      // Determine turn direction (simplified - could use gyroscope data)
-      const turnDirection = 'straight';
-
-      // Mock speed (replace with actual speed sensor data)
-      const speed = 45.0;
+      // Use state variables for Tesla Autopilot View consistency
+      const currentRoadType = roadType;
+      const currentTurnDirection = turnDirection;
+      const currentSpeed = speed;
 
       // Call surround vision API
       const response = await fetch(`${normalizedUrl}/surround-vision/render-mock`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          road_type: roadType,
-          speed: speed,
-          turn_direction: turnDirection,
+          road_type: currentRoadType,
+          speed: currentSpeed,
+          turn_direction: currentTurnDirection,
           detected_objects: detectedObjectsData
         }),
         ...withTunnelHeaders()
@@ -942,6 +944,40 @@ function enhanceFrameForDetection(ctx, width, height, diagnostics) {
       setDetections(all);
       setStatus(`Detecting... ${all.length || 0} objects`);
       setError(null);
+
+      // Update Tesla Autopilot View state based on detections
+      if (fullscreenSceneMode === 'autopilot') {
+        // Calculate average speed from moving objects
+        const movingObjects = all.filter(d => d.is_moving && d.speed_kmh > 0);
+        if (movingObjects.length > 0) {
+          const avgSpeed = movingObjects.reduce((sum, d) => sum + Number(d.speed_kmh), 0) / movingObjects.length;
+          setSpeed(Math.round(avgSpeed * 0.8)); // Assume we're going slightly slower than traffic
+        } else {
+          setSpeed(Math.max(0, speed - 1)); // Gradually slow down if no moving objects
+        }
+
+        // Determine road type based on object density and types
+        const carCount = all.filter(d => d.label === 'car' || d.label === 'truck').length;
+        const personCount = all.filter(d => d.label === 'person').length;
+        if (carCount > 3) {
+          setRoadType('highway');
+        } else if (personCount > 0 || all.some(d => d.label === 'bicycle')) {
+          setRoadType('urban');
+        } else if (carCount === 0 && all.length === 0) {
+          setRoadType('rural');
+        }
+
+        // Determine turn direction based on object positions
+        const leftObjects = all.filter(d => d.bbox_xyxy && d.bbox_xyxy[0] < frameSize.w / 3).length;
+        const rightObjects = all.filter(d => d.bbox_xyxy && d.bbox_xyxy[0] > frameSize.w * 2/3).length;
+        if (leftObjects > rightObjects + 1) {
+          setTurnDirection('right'); // More objects on left means we're turning right
+        } else if (rightObjects > leftObjects + 1) {
+          setTurnDirection('left'); // More objects on right means we're turning left
+        } else {
+          setTurnDirection('straight');
+        }
+      }
 
       let band = 'SAFE';
       let topThreat = null;
@@ -1627,8 +1663,8 @@ function enhanceFrameForDetection(ctx, width, height, diagnostics) {
                     height={layout.h || winH}
                     visionData={{
                       timestamp: Date.now(),
-                      speed: 45, // Mock speed - replace with actual
-                      road_type: "urban",
+                      speed: speed, // Use actual speed state
+                      road_type: roadType,
                       weather: "clear",
                       bike: {
                         position: "center",
@@ -1671,12 +1707,11 @@ function enhanceFrameForDetection(ctx, width, height, diagnostics) {
                   />
                 ) : fullscreenSceneMode === 'autopilot' ? (
                   <TeslaAutopilotView
-                    width={layout.w || winW}
-                    height={layout.h || winH}
+                    speed={speed || 0}
+                    turnDirection={turnDirection || 'straight'}
+                    roadType={roadType || 'urban'}
                     detections={detections}
-                    frameSize={frameSize}
-                    isRunning={isRunning}
-                    mode="driving"
+                    isActive={isRunning}
                   />
                 ) : fullscreenSceneMode === 'tesla' ? (
                   <TeslaStyleView
