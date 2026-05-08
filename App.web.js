@@ -16,7 +16,7 @@ import BirdseyeSceneWeb from './BirdseyeScene.web';
 import Advanced3DSceneWeb from './Advanced3DScene.web';
 import Realistic3DSceneWeb from './Realistic3DScene.web';
 import TeslaStyleView from './TeslaStyleView.web';
-import TeslaAutopilotView from './TeslaAutopilotView.web';
+import TeslaAutopilotViewOptimized from './TeslaAutopilotViewOptimized.web';
 import Immersive360ViewWeb from './Immersive360View.web';
 import Immersive360FallbackWeb from './Immersive360Fallback.web';
 import Motorcycle360Vision from './Motorcycle360Vision.web';
@@ -1650,7 +1650,7 @@ function enhanceFrameForDetection(ctx, width, height, diagnostics) {
                     detectionsCount={detections.length}
                   />
                 ) : fullscreenSceneMode === 'surround360' ? (
-                  <TeslaAutopilotView
+                  <TeslaAutopilotViewOptimized
                     speed={speed || 0}
                     turnDirection={turnDirection || 'straight'}
                     roadType={roadType || 'urban'}
@@ -1706,7 +1706,7 @@ function enhanceFrameForDetection(ctx, width, height, diagnostics) {
                     fallbackMode={true}
                   />
                 ) : fullscreenSceneMode === 'autopilot' ? (
-                  <TeslaAutopilotView
+                  <TeslaAutopilotViewOptimized
                     speed={speed || 0}
                     turnDirection={turnDirection || 'straight'}
                     roadType={roadType || 'urban'}
