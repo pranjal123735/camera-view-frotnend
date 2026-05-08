@@ -187,22 +187,22 @@ const TeslaAutopilotViewOptimized = ({
     }
   }, [COLORS]);
 
-  // ULTRA FAST Tesla car drawing
+  // ULTRA FAST Tesla car drawing - STATIONARY at center
   const drawTeslaCarFast = useCallback((ctx, canvasWidth, canvasHeight) => {
     const centerX = canvasWidth / 2;
     const centerY = canvasHeight / 2 + 20;
-    const isMoving = bikeAnimation.isMoving || speed > 0;
     
+    // Car stays FIXED at center - no movement animations
     ctx.save();
     ctx.translate(centerX, centerY);
     
-    // Simplified car body - single gradient
-    ctx.fillStyle = getGradient(ctx, 'car', isMoving);
+    // Static car body - Tesla blue
+    ctx.fillStyle = getGradient(ctx, 'car', false); // Always static gradient
     ctx.beginPath();
     ctx.roundRect(-22, -15, 44, 30, 8);
     ctx.fill();
     
-    // Simple wheels - no rotation animation for performance
+    // Static wheels - no rotation
     ctx.fillStyle = '#333333';
     ctx.fillRect(-20, -18, 8, 4);
     ctx.fillRect(12, -18, 8, 4);
@@ -210,9 +210,9 @@ const TeslaAutopilotViewOptimized = ({
     ctx.fillRect(12, 14, 8, 4);
     
     ctx.restore();
-  }, [bikeAnimation.isMoving, speed, getGradient]);
+  }, [getGradient]);
 
-  // ULTRA FAST road drawing - minimal operations
+  // ULTRA FAST road drawing - MOVING road creates motion feeling
   const drawRoadFast = useCallback((ctx, canvasWidth, canvasHeight) => {
     const roadWidth = 200;
     const centerX = canvasWidth / 2;
@@ -221,39 +221,119 @@ const TeslaAutopilotViewOptimized = ({
     ctx.fillStyle = COLORS.road;
     ctx.fillRect(centerX - roadWidth/2, 0, roadWidth, canvasHeight);
     
-    // Only draw center line for performance
+    // ROAD MOVES based on speed and motion - car stays still
+    const actualSpeed = bikeAnimation.isMoving ? speed : 0;
+    const roadSpeed = Math.max(actualSpeed * 0.15, speed * 0.1); // Road moves faster for better effect
+    
+    if (roadSpeed > 0) {
+      roadOffsetRef.current += roadSpeed;
+      if (roadOffsetRef.current > 30) roadOffsetRef.current = 0;
+    }
+    
+    // Center lane line (white) - MOVES towards car
     ctx.strokeStyle = COLORS.laneCenter;
     ctx.lineWidth = 2;
     ctx.setLineDash([15, 15]);
     
-    const actualSpeed = bikeAnimation.isMoving ? speed : 0;
-    if (actualSpeed > 0) {
-      roadOffsetRef.current += actualSpeed * 0.08;
-      if (roadOffsetRef.current > 30) roadOffsetRef.current = 0;
-    }
-    
     ctx.beginPath();
+    // Road lines move from top to bottom (towards the car)
     for (let y = -roadOffsetRef.current; y < canvasHeight + 30; y += 30) {
       ctx.moveTo(centerX, y);
       ctx.lineTo(centerX, y + 15);
     }
     ctx.stroke();
+    
+    // Side lane lines - also moving towards car
+    ctx.strokeStyle = COLORS.laneLines;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let y = -roadOffsetRef.current; y < canvasHeight + 30; y += 30) {
+      ctx.moveTo(centerX - 60, y);
+      ctx.lineTo(centerX - 60, y + 15);
+      ctx.moveTo(centerX + 60, y);
+      ctx.lineTo(centerX + 60, y + 15);
+    }
+    ctx.stroke();
+    
     ctx.setLineDash([]);
   }, [COLORS, bikeAnimation.isMoving, speed]);
 
-  // ULTRA FAST UI drawing - minimal text operations
+  // Add motion blur and perspective effects for enhanced movement feeling
+  const drawMotionEffects = useCallback((ctx, canvasWidth, canvasHeight) => {
+    const actualSpeed = bikeAnimation.isMoving ? speed : 0;
+    
+    if (actualSpeed > 5) { // Only show effects when moving at reasonable speed
+      // Motion blur lines on sides (speed lines)
+      ctx.strokeStyle = `rgba(255, 255, 255, ${Math.min(0.3, actualSpeed / 100)})`;
+      ctx.lineWidth = 1;
+      
+      const numLines = Math.min(8, Math.floor(actualSpeed / 5));
+      for (let i = 0; i < numLines; i++) {
+        const x = 50 + i * 20;
+        const length = 30 + (actualSpeed * 0.5);
+        const offset = (roadOffsetRef.current * 2) % 40;
+        
+        // Left side speed lines
+        ctx.beginPath();
+        ctx.moveTo(x, offset + i * 40);
+        ctx.lineTo(x, offset + i * 40 + length);
+        ctx.stroke();
+        
+        // Right side speed lines
+        ctx.beginPath();
+        ctx.moveTo(canvasWidth - x, offset + i * 40);
+        ctx.lineTo(canvasWidth - x, offset + i * 40 + length);
+        ctx.stroke();
+      }
+      
+      // Perspective grid effect (subtle)
+      if (actualSpeed > 15) {
+        ctx.strokeStyle = `rgba(200, 200, 200, ${Math.min(0.1, actualSpeed / 200)})`;
+        ctx.lineWidth = 0.5;
+        
+        // Perspective lines converging to center
+        const centerX = canvasWidth / 2;
+        const vanishingPoint = canvasHeight * 0.3;
+        
+        for (let i = -3; i <= 3; i++) {
+          if (i === 0) continue;
+          const startX = centerX + i * 80;
+          
+          ctx.beginPath();
+          ctx.moveTo(startX, canvasHeight);
+          ctx.lineTo(centerX, vanishingPoint);
+          ctx.stroke();
+        }
+      }
+    }
+  }, [bikeAnimation.isMoving, speed]);
   const drawTopUIFast = useCallback((ctx, canvasWidth) => {
-    // Only essential UI elements
+    // Large speed number (shows movement)
     ctx.fillStyle = COLORS.text;
-    ctx.font = 'bold 72px Arial'; // Faster font
+    ctx.font = 'bold 72px Arial';
     ctx.textAlign = 'center';
     ctx.fillText(Math.round(speed).toString(), canvasWidth / 2, 80);
     
-    // Simplified status
+    // Status row with movement indication
     ctx.font = '12px Arial';
     ctx.fillStyle = COLORS.textGreen;
-    ctx.fillText('READY', canvasWidth / 2, 110);
-  }, [COLORS, speed]);
+    
+    // Show READY and movement status
+    const isMoving = bikeAnimation.isMoving || speed > 0;
+    const statusText = isMoving ? 'MOVING' : 'READY';
+    ctx.fillText(statusText, canvasWidth / 2, 110);
+    
+    // Speed indicator
+    ctx.fillStyle = COLORS.textSecondary;
+    ctx.fillText('km/h', canvasWidth / 2 + 80, 110);
+    
+    // Movement indicator (visual feedback)
+    if (isMoving) {
+      ctx.fillStyle = COLORS.textGreen;
+      ctx.font = '10px Arial';
+      ctx.fillText('▲ FORWARD', canvasWidth / 2, 130);
+    }
+  }, [COLORS, speed, bikeAnimation.isMoving]);
 
   // MAIN ULTRA-FAST RENDER FUNCTION
   const renderFast = useCallback(() => {
@@ -284,6 +364,11 @@ const TeslaAutopilotViewOptimized = ({
     
     // Draw components in order of importance
     drawRoadFast(ctx, canvasWidth, canvasHeight);
+    
+    // Add motion effects for movement feeling
+    drawMotionEffects(ctx, canvasWidth, canvasHeight);
+    
+    // Draw Tesla car (STATIONARY at center)
     drawTeslaCarFast(ctx, canvasWidth, canvasHeight);
     
     // PRIORITY: Draw only closest/most important detections first
@@ -296,8 +381,31 @@ const TeslaAutopilotViewOptimized = ({
       const centerX_norm = (detection.bbox_xyxy[0] + detection.bbox_xyxy[2]) / 2 / canvasWidth;
       const centerY_norm = (detection.bbox_xyxy[1] + detection.bbox_xyxy[3]) / 2 / canvasHeight;
       
-      const worldX = canvasWidth / 2 + (centerX_norm - 0.5) * 300;
-      const worldY = canvasHeight / 2 + 20 - (1 - centerY_norm) * 200;
+      // Map to Tesla view coordinates - objects move towards car
+      let worldX = canvasWidth / 2 + (centerX_norm - 0.5) * 300;
+      let worldY = canvasHeight / 2 + 20 - (1 - centerY_norm) * 200;
+      
+      // OBJECTS MOVE towards car based on speed (road movement effect)
+      const actualSpeed = bikeAnimation.isMoving ? speed : 0;
+      const objectMovement = actualSpeed * 0.1; // Objects move towards car
+      
+      if (actualSpeed > 0) {
+        // Objects in front move towards car (down the screen)
+        if (worldY < canvasHeight / 2) {
+          worldY += objectMovement * 2; // Objects ahead move faster towards car
+        }
+        // Objects behind move away from car (up the screen)  
+        else {
+          worldY -= objectMovement;
+        }
+        
+        // Side objects also move slightly towards center (perspective effect)
+        const centerDistance = Math.abs(worldX - canvasWidth / 2);
+        if (centerDistance > 50) {
+          const moveTowardCenter = (worldX > canvasWidth / 2) ? -objectMovement * 0.3 : objectMovement * 0.3;
+          worldX += moveTowardCenter;
+        }
+      }
       
       const size = getObjectSize(detection.label);
       const color = getObjectColor(detection);
@@ -306,7 +414,7 @@ const TeslaAutopilotViewOptimized = ({
     });
     
     drawTopUIFast(ctx, canvasWidth);
-  }, [detections, COLORS, drawRoadFast, drawTeslaCarFast, drawTopUIFast, getObjectSize, getObjectColor, draw3DObjectFast]);
+  }, [detections, COLORS, drawRoadFast, drawMotionEffects, drawTeslaCarFast, drawTopUIFast, getObjectSize, getObjectColor, draw3DObjectFast]);
 
   // ULTRA-HIGH PERFORMANCE ANIMATION LOOP
   useEffect(() => {
