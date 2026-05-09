@@ -1,5 +1,9 @@
 import { useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View, Platform } from 'react-native';
+import BikeModelDemo from './BikeModelDemo.web';
+import TestYourModel from './TestYourModel.web';
+import MyBikeInTesla from './MyBikeInTesla.web';
+import PerformanceToggle from './components/PerformanceToggle';
 
 const DEFAULT_BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://127.0.0.1:8001';
 
@@ -25,6 +29,7 @@ export default function App() {
   const [status, setStatus] = useState('Idle');
   const [detections, setDetections] = useState([]);
   const [error, setError] = useState(null);
+  const [currentView, setCurrentView] = useState('main'); // Add view state
 
   const normalizedUrl = useMemo(() => backendUrl.replace(/\/+$/, ''), [backendUrl]);
   const requestInit = useMemo(
@@ -70,43 +75,117 @@ export default function App() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Car Vision MVP</Text>
-      <Text style={styles.text}>
-        This app now connects to a Python backend for vehicle metrics (distance, speed, collision risk).
-      </Text>
-
-      <TextInput
-        style={styles.input}
-        value={backendUrl}
-        onChangeText={setBackendUrl}
-        autoCapitalize="none"
-        autoCorrect={false}
-        placeholder="Backend URL"
-        placeholderTextColor="#93A3B8"
-      />
-
-      <View style={styles.row}>
-        <Pressable style={styles.button} onPress={checkBackend}>
-          <Text style={styles.buttonText}>Check Backend</Text>
-        </Pressable>
-        <Pressable style={[styles.button, styles.buttonAlt]} onPress={loadDemo}>
-          <Text style={styles.buttonText}>Load Demo</Text>
-        </Pressable>
-      </View>
-
-      <Text style={styles.status}>{status}</Text>
-      {error ? <Text style={styles.error}>Error: {error}</Text> : null}
-
-      <ScrollView contentContainerStyle={styles.list}>
-        {detections.map((item) => (
-          <MetricCard key={`${item.track_id}-${item.label}`} item={item} />
-        ))}
-        {!detections.length ? (
-          <Text style={styles.empty}>
-            No detections yet. Start backend and tap "Load Demo", then connect real camera frames next.
+      {currentView === 'main' ? (
+        <>
+          <Text style={styles.title}>Car Vision MVP</Text>
+          <Text style={styles.text}>
+            This app now connects to a Python backend for vehicle metrics (distance, speed, collision risk).
           </Text>
-        ) : null}
-      </ScrollView>
+
+          <TextInput
+            style={styles.input}
+            value={backendUrl}
+            onChangeText={setBackendUrl}
+            autoCapitalize="none"
+            autoCorrect={false}
+            placeholder="Backend URL"
+            placeholderTextColor="#93A3B8"
+          />
+
+          <View style={styles.row}>
+            <Pressable style={styles.button} onPress={checkBackend}>
+              <Text style={styles.buttonText}>Check Backend</Text>
+            </Pressable>
+            <Pressable style={[styles.button, styles.buttonAlt]} onPress={loadDemo}>
+              <Text style={styles.buttonText}>Load Demo</Text>
+            </Pressable>
+          </View>
+
+          {/* Performance Toggle */}
+          {Platform.OS === 'web' && (
+            <PerformanceToggle backendUrl={normalizedUrl} />
+          )}
+
+          {/* Model Testing and Tesla Demo Buttons */}
+          {Platform.OS === 'web' && (
+            <>
+              <View style={styles.row}>
+                <Pressable 
+                  style={[styles.button, styles.buttonTest]} 
+                  onPress={() => setCurrentView('test')}
+                >
+                  <Text style={styles.buttonText}>🔍 Test Your Model</Text>
+                </Pressable>
+                <Pressable 
+                  style={[styles.button, styles.buttonSimple]} 
+                  onPress={() => setCurrentView('simple')}
+                >
+                  <Text style={styles.buttonText}>🏍️ My Bike Tesla</Text>
+                </Pressable>
+              </View>
+              <Pressable 
+                style={[styles.button, styles.buttonTesla]} 
+                onPress={() => setCurrentView('bike')}
+              >
+                <Text style={styles.buttonText}>🎛️ Full Tesla Display Demo</Text>
+              </Pressable>
+            </>
+          )}
+
+          <Text style={styles.status}>{status}</Text>
+          {error ? <Text style={styles.error}>Error: {error}</Text> : null}
+
+          <ScrollView contentContainerStyle={styles.list}>
+            {detections.map((item) => (
+              <MetricCard key={`${item.track_id}-${item.label}`} item={item} />
+            ))}
+            {!detections.length ? (
+              <Text style={styles.empty}>
+                No detections yet. Start backend and tap "Load Demo", then connect real camera frames next.
+              </Text>
+            ) : null}
+          </ScrollView>
+        </>
+      ) : currentView === 'simple' ? (
+        <>
+          {/* Back Button */}
+          <Pressable 
+            style={[styles.button, styles.backButton]} 
+            onPress={() => setCurrentView('main')}
+          >
+            <Text style={styles.buttonText}>← Back to Main</Text>
+          </Pressable>
+          
+          {/* Simple Tesla Bike Display */}
+          <MyBikeInTesla />
+        </>
+      ) : currentView === 'test' ? (
+        <>
+          {/* Back Button */}
+          <Pressable 
+            style={[styles.button, styles.backButton]} 
+            onPress={() => setCurrentView('main')}
+          >
+            <Text style={styles.buttonText}>← Back to Main</Text>
+          </Pressable>
+          
+          {/* Model Test */}
+          <TestYourModel />
+        </>
+      ) : (
+        <>
+          {/* Back Button */}
+          <Pressable 
+            style={[styles.button, styles.backButton]} 
+            onPress={() => setCurrentView('main')}
+          >
+            <Text style={styles.buttonText}>← Back to Main</Text>
+          </Pressable>
+          
+          {/* Tesla Bike Demo */}
+          <BikeModelDemo />
+        </>
+      )}
     </View>
   );
 }
@@ -132,8 +211,34 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     alignItems: 'center',
     backgroundColor: '#2563EB',
+    marginBottom: 10,
   },
   buttonAlt: { backgroundColor: '#0E7490' },
+  buttonTesla: { 
+    backgroundColor: '#22d3ee',
+    flex: 'none',
+    paddingHorizontal: 20,
+  },
+  buttonTest: {
+    backgroundColor: '#10b981',
+    flex: 'none', 
+    paddingHorizontal: 20,
+  },
+  buttonSimple: {
+    backgroundColor: '#8b5cf6',
+    flex: 'none',
+    paddingHorizontal: 20,
+  },
+  backButton: {
+    backgroundColor: '#374151',
+    flex: 'none',
+    paddingHorizontal: 20,
+    marginBottom: 0,
+    position: 'absolute',
+    top: 10,
+    left: 16,
+    zIndex: 10,
+  },
   buttonText: { color: '#fff', fontWeight: '700' },
   status: { color: '#E2E8F0', marginBottom: 6 },
   error: { color: '#FCA5A5', marginBottom: 8 },
